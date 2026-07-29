@@ -12,5 +12,5 @@ steps:
       python3 find_unterminated_logs.py core/src --exclude=LogParanoiaTest.java
       echo "--- rust fmt + clippy"
       for crate in qdb-core qdb-parquet-meta qdbr; do
-        ( cd core/rust/$crate && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
+        ( cd core/rust/"$crate" && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings ) || exit 1
       done
