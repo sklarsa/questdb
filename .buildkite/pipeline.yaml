@@ -1,3 +1,16 @@
+# Buildkite Linux + macOS smoke test for QuestDB core.
+# Static pipeline on hosted agents (clean-room, Maven from Central).
+# See docs/superpowers/specs/2026-07-29-buildkite-linux-smoke-test-design.md
 steps:
-    label: "Hello World"
-    command: "echo 'Hellow World!'"
+  - label: ":lint-roller: lint"
+    key: lint
+    agents:
+      queue: linux-small
+    command: |
+      source .buildkite/prelude.sh
+      echo "--- unterminated log check"
+      python3 find_unterminated_logs.py core/src --exclude=LogParanoiaTest.java
+      echo "--- rust fmt + clippy"
+      for crate in qdb-core qdb-parquet-meta qdbr; do
+        ( cd core/rust/$crate && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
+      done
