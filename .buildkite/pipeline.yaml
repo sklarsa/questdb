@@ -14,3 +14,9 @@ steps:
       for crate in qdb-core qdb-parquet-meta qdbr; do
         ( cd core/rust/"$crate" && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings ) || exit 1
       done
+      echo "--- compile core (needed for bytecode check)"
+      mvn $MVN_COMMON -pl core -am -DskipTests package
+      echo "--- bytecode size check"
+      JAR_FILE=$(find core/target -maxdepth 1 -name "questdb-*.jar" ! -name "*-tests.jar" ! -name "*-sources.jar" ! -name "*-javadoc.jar" | head -1)
+      if [ -z "$JAR_FILE" ]; then echo "No QuestDB JAR found"; exit 1; fi
+      ./ci/check-bytecode-size.sh --jar "$JAR_FILE" --threshold 8000
