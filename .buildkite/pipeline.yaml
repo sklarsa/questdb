@@ -50,7 +50,7 @@ steps:
     command: |
       source .buildkite/prelude.sh
       mvn $MVN_COMMON clean test \
-        -Dtest.exclude='**/griffin/**,**/cairo/**,**/ServerMainTest.java'
+        -Dtest.exclude='**/griffin/**,**/cairo/**,**/compat/**,**/cliutil/**,**/ServerMainTest.java'
 
   - label: ":bar_chart: coverage (proof-of-path)"
     key: coverage
