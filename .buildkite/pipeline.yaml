@@ -51,3 +51,21 @@ steps:
       source .buildkite/prelude.sh
       mvn $MVN_COMMON clean test \
         -Dtest.exclude='**/griffin/**,**/cairo/**,**/ServerMainTest.java'
+
+  - label: ":bar_chart: coverage (proof-of-path)"
+    key: coverage
+    agents:
+      queue: linux-medium
+    artifact_paths:
+      - "core/target/site/jacoco/**/*"
+      - "core/target/jacoco.exec"
+    command: |
+      source .buildkite/prelude.sh
+      echo "--- pre-build core so coverage run has deps"
+      mvn $MVN_COMMON -pl core -am -DskipTests install
+      echo "--- instrumented test slice (std package) with jacoco"
+      mvn $MVN_COMMON -f core/pom.xml test \
+        -P jacoco,qdbr-coverage \
+        -Dtest.include='**/std/**'
+      echo "--- jacoco report"
+      mvn $MVN_COMMON -f core/pom.xml jacoco:report || true
