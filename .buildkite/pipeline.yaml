@@ -20,3 +20,34 @@ steps:
       JAR_FILE=$(find core/target -maxdepth 1 -name "questdb-*.jar" ! -name "*-tests.jar" ! -name "*-sources.jar" ! -name "*-javadoc.jar" | head -1)
       if [ -z "$JAR_FILE" ]; then echo "No QuestDB JAR found"; exit 1; fi
       ./ci/check-bytecode-size.sh --jar "$JAR_FILE" --threshold 8000
+
+  - label: ":coffee: test: griffin"
+    key: test-griffin
+    agents:
+      queue: linux-large
+    artifact_paths:
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      source .buildkite/prelude.sh
+      mvn $MVN_COMMON clean test -Dtest.include='**/griffin/**'
+
+  - label: ":coffee: test: cairo"
+    key: test-cairo
+    agents:
+      queue: linux-large
+    artifact_paths:
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      source .buildkite/prelude.sh
+      mvn $MVN_COMMON clean test -Dtest.include='**/cairo/**'
+
+  - label: ":coffee: test: other"
+    key: test-other
+    agents:
+      queue: linux-medium
+    artifact_paths:
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      source .buildkite/prelude.sh
+      mvn $MVN_COMMON clean test \
+        -Dtest.exclude='**/griffin/**,**/cairo/**,**/ServerMainTest.java'
