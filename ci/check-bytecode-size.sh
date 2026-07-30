@@ -22,15 +22,30 @@ EXCLUSIONS=(
     "io.questdb.PropServerConfiguration.PropServerConfiguration"
 )
 
+JAR_DIR=""
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         --threshold) THRESHOLD="$2"; shift 2 ;;
         --jar) JAR_FILE="$2"; shift 2 ;;
-        *) echo "Usage: $0 [--threshold N] --jar FILE"; exit 1 ;;
+        --jar-dir) JAR_DIR="$2"; shift 2 ;;
+        *) echo "Usage: $0 [--threshold N] (--jar FILE | --jar-dir DIR)"; exit 1 ;;
     esac
 done
 
-[[ -z "$JAR_FILE" ]] && { echo "Error: --jar required"; exit 1; }
+# --jar-dir discovers the main artifact JAR inside DIR (skipping the
+# tests/sources/javadoc JARs). The glob and find run here, inside this
+# script's real shell - Buildkite's inline command wrapper mangles `*` in a
+# pipeline `command:` block, so callers on Buildkite must use --jar-dir rather
+# than expand the glob themselves.
+if [[ -z "$JAR_FILE" && -n "$JAR_DIR" ]]; then
+    JAR_FILE=$(find "$JAR_DIR" -maxdepth 1 -name "questdb-*.jar" \
+        ! -name "*-tests.jar" ! -name "*-sources.jar" ! -name "*-javadoc.jar" \
+        | head -1)
+    [[ -z "$JAR_FILE" ]] && { echo "Error: no QuestDB JAR found in $JAR_DIR"; ls -la "$JAR_DIR" 2>&1 | head; exit 1; }
+fi
+
+[[ -z "$JAR_FILE" ]] && { echo "Error: --jar or --jar-dir required"; exit 1; }
 [[ ! -f "$JAR_FILE" ]] && { echo "Error: JAR not found: $JAR_FILE"; exit 1; }
 
 echo "Checking bytecode size in: $JAR_FILE"

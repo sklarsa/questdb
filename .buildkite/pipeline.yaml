@@ -30,14 +30,12 @@ steps:
       echo "--- compile core (needed for bytecode check)"
       mvn $MVN_COMMON -pl core -am -DskipTests package
       echo "--- bytecode size check"
-      # Select the main JAR with a shell glob + case filter, not find. On the
-      # Buildkite agent `find core/target ... ! -name '*-tests.jar'` returned
-      # nothing even though `ls core/target/questdb-*.jar` on the same line
-      # listed both JARs - the glob works where find did not. Keep it all on one
-      # line so JAR_FILE never crosses a line boundary (Buildkite runs each line
-      # in its own shell). The case filter skips the tests/sources/javadoc JARs
-      # and picks the main artifact.
-      JAR_FILE=""; for f in core/target/questdb-*.jar; do [ -f "$f" ] || continue; case "$f" in *-tests.jar|*-sources.jar|*-javadoc.jar) continue;; esac; JAR_FILE="$f"; break; done; echo "JAR_FILE=[$JAR_FILE]"; test -n "$JAR_FILE" || { echo "No QuestDB JAR found in $(pwd)/core/target"; ls -la core/target 2>&1 | head; exit 1; }; ./ci/check-bytecode-size.sh --jar "$JAR_FILE" --threshold 8000
+      # Pass the directory and let check-bytecode-size.sh discover the JAR. The
+      # `*` glob to skip the tests/sources/javadoc JARs must run inside the
+      # script's real shell: Buildkite's inline command wrapper eats `*` in a
+      # pipeline command block, so both a bare glob and `find -name 'questdb-*'`
+      # came back empty here even though `ls core/target` listed the JARs.
+      ./ci/check-bytecode-size.sh --jar-dir core/target --threshold 8000
 
   - label: ":coffee: test: griffin"
     key: test-griffin
