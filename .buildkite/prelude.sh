@@ -94,13 +94,44 @@ ensure_rust() {
   fi
 }
 
+ensure_native_build_tools() {
+  # cmake + nasm compile the client's native libquestdb.so (nasm assembles the
+  # x86-64 asmlib). The custom image bakes cmake+build-essential but not nasm;
+  # a plain hosted agent may lack all three. Install whatever is missing.
+  if command -v cmake >/dev/null 2>&1 && command -v nasm >/dev/null 2>&1; then return; fi
+  echo "Installing native build tools (cmake/nasm) for the client compile"
+  if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake nasm build-essential
+  else
+    echo "WARN: no apt-get; assuming cmake/nasm are present"
+  fi
+}
+
 install_client() {
   # `-P local-client` makes the core build depend on the questdb-client
   # -SNAPSHOT, which lives only in the client submodule and is not published.
   # Build+install it into the local .m2 (matches CLAUDE.md). This is repo state,
   # not toolchain, so it runs every time regardless of the agent image.
-  # --recursive: the client carries a nested submodule (zstd).
+  # --recursive: the client carries a nested submodule (zstd, needed by CMake).
   git submodule update --init --recursive java-questdb-client
+  # The client submodule no longer commits its compiled native libraries, so a
+  # -SNAPSHOT client jar built from source ships without libquestdb.so. Every
+  # client-dependent test then dies at class load with
+  #   FatalError: cannot find /io/questdb/client/bin/linux-x86-64/libquestdb.so
+  # Compile it here (mirrors ci/templates/build-client-native.yml, Linux path).
+  # CMake writes to core/target/classes/.../bin-local/, which the mvn clean
+  # below would wipe; copy it into the client's source resources so it survives
+  # the clean and lands on the production resource path the loader checks first
+  # (see io.questdb.client.std.Os). Linux x86-64 only - the sole Buildkite target.
+  ensure_native_build_tools
+  (
+    cd java-questdb-client/core
+    cmake -DCMAKE_BUILD_TYPE=Release -B cmake-build-release -S.
+    cmake --build cmake-build-release --config Release --parallel
+    mkdir -p src/main/resources/io/questdb/client/bin/linux-x86-64
+    cp target/classes/io/questdb/client/bin-local/libquestdb.so \
+       src/main/resources/io/questdb/client/bin/linux-x86-64/libquestdb.so
+  ) || { echo "Failed to build client native library"; exit 1; }
   ( cd java-questdb-client && mvn -q clean install -DskipTests ) || {
     echo "Failed to build/install java-questdb-client"; exit 1;
   }
