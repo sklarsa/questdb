@@ -8,16 +8,14 @@ steps:
     agents:
       queue: linux-small
     command: |
-      # Pin the checkout root explicitly. On Buildkite's hosted-agent command
-      # shell, both $PWD and `pwd` came through empty (getcwd fails against the
-      # bind-mounted workspace), so a relative `core/target` and $(pwd) both
-      # resolved to nothing and the bytecode check silently missed the JAR that
-      # mvn had just built. BUILDKITE_BUILD_CHECKOUT_PATH is set by the agent to
-      # the absolute checkout dir; cd into it so every relative path below (and
-      # the JAR find) has a known, stable root.
-      echo "diag: BUILDKITE_BUILD_CHECKOUT_PATH=[${BUILDKITE_BUILD_CHECKOUT_PATH:-}] pwd=[$(pwd 2>&1)]"
-      REPO_ROOT="${BUILDKITE_BUILD_CHECKOUT_PATH:-$(pwd)}"
-      if [ -n "$REPO_ROOT" ]; then cd "$REPO_ROOT"; else echo "FATAL: no checkout root"; exit 1; fi
+      # Buildkite runs each line of this block as its own shell, so a shell
+      # variable set on one line (REPO_ROOT=..., JAR_FILE=$(...)) reads back
+      # empty on the next - that, not any CWD problem, is what kept the bytecode
+      # check from finding the JAR. Only two things survive across lines: real
+      # environment variables (from the agent or exported by a sourced file),
+      # and the current directory. So keep all CWD-dependent logic self-contained
+      # within a single line, and rely on relative paths from the checkout root
+      # (each line starts there) rather than a saved absolute path.
       source .buildkite/prelude.sh
       echo "--- unterminated log check"
       python3 find_unterminated_logs.py core/src --exclude=LogParanoiaTest.java
@@ -26,18 +24,16 @@ steps:
       # rust-test-and-lint.yml. A `for crate in ...` loop expanded to an empty
       # $crate under Buildkite's command wrapper, landing in core/rust (which
       # has no Cargo.toml) and failing cargo fmt.
-      ( cd "$REPO_ROOT/core/rust/qdb-core"         && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
-      ( cd "$REPO_ROOT/core/rust/qdb-parquet-meta" && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
-      ( cd "$REPO_ROOT/core/rust/qdbr"             && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
+      ( cd core/rust/qdb-core         && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
+      ( cd core/rust/qdb-parquet-meta && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
+      ( cd core/rust/qdbr             && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
       echo "--- compile core (needed for bytecode check)"
       mvn $MVN_COMMON -pl core -am -DskipTests package
       echo "--- bytecode size check"
-      TARGET_DIR="$REPO_ROOT/core/target"
-      echo "Looking for JAR under: $TARGET_DIR"
-      ls -1 "$TARGET_DIR"/questdb-*.jar 2>/dev/null || echo "(no questdb-*.jar in $TARGET_DIR)"
-      JAR_FILE=$(find "$TARGET_DIR" -maxdepth 1 -name "questdb-*.jar" ! -name "*-tests.jar" ! -name "*-sources.jar" ! -name "*-javadoc.jar" | head -1)
-      if [ -z "$JAR_FILE" ]; then echo "No QuestDB JAR found under $TARGET_DIR"; exit 1; fi
-      ./ci/check-bytecode-size.sh --jar "$JAR_FILE" --threshold 8000
+      # Find the JAR and run the check in one line so JAR_FILE never has to
+      # survive a line boundary. Relative core/target resolves from the checkout
+      # root, which is the CWD at the start of every line.
+      JAR_FILE=$(find core/target -maxdepth 1 -name "questdb-*.jar" ! -name "*-tests.jar" ! -name "*-sources.jar" ! -name "*-javadoc.jar" | head -1); echo "JAR_FILE=[$JAR_FILE]"; test -n "$JAR_FILE" || { echo "No QuestDB JAR found in $(pwd)/core/target"; ls -la core/target 2>&1 | head; exit 1; }; ./ci/check-bytecode-size.sh --jar "$JAR_FILE" --threshold 8000
 
   - label: ":coffee: test: griffin"
     key: test-griffin
