@@ -61,9 +61,19 @@ steps:
     key: coverage
     agents:
       queue: linux-medium
-    artifact_paths:
-      - "core/target/site/jacoco/**/*"
-      - "core/target/jacoco.exec"
+    # The JaCoCo HTML report emits one file per class - thousands of small
+    # files, well over Buildkite's hard limit of 5000 artifacts per job.
+    # Compress the whole report tree into a single archive before upload so
+    # it counts as one artifact. Uses the official artifacts plugin's
+    # `compressed` option. Note: globs (* / **) do NOT work with `compressed`
+    # - `upload` must name the directory/file itself, which the plugin zips
+    # recursively into one archive.
+    plugins:
+      - artifacts#v1.9.4:
+          upload:
+            - "core/target/site/jacoco"
+            - "core/target/jacoco.exec"
+          compressed: jacoco-report.zip
     command: |
       source .buildkite/prelude.sh
       echo "--- pre-build core so coverage run has deps"
