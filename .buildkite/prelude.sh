@@ -1,39 +1,97 @@
 #!/usr/bin/env bash
 # Shared setup for every Buildkite step. Idempotent; safe to run per-step.
-# Clean-room hosted agents: no Reposilite cache, no apt mirror. Maven resolves
-# from Central. Installs JDK 25 on Linux; macOS agents ship a JDK we select.
+#
+# Buildkite HOSTED agents are minimal images: no preinstalled Maven, no Rust,
+# and no JDK 25 in the default apt repos. So this prelude provisions the whole
+# toolchain itself (JDK 25 + Maven + Rust), pins versions, and puts them on
+# PATH. Everything resolves from upstream (Temurin / Apache / rustup) - no
+# Reposilite cache, no apt mirror. Each tool install is guarded so re-running
+# the prelude in a warm agent is cheap.
 set -euo pipefail
 
-install_jdk_linux() {
-  if [ -d /usr/lib/jvm/java-25-openjdk-amd64 ]; then
-    export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
+# Pinned tool versions. Bump here in one place.
+JDK_MAJOR=25
+MAVEN_VERSION=3.9.9
+# Where we drop downloaded toolchains. TOOLS_DIR persists per-agent-boot; the
+# guards below skip re-download when it is already populated.
+TOOLS_DIR="${TOOLS_DIR:-$HOME/.buildkite-tools}"
+mkdir -p "$TOOLS_DIR"
+
+os=$(uname -s)
+arch=$(uname -m)
+
+install_jdk() {
+  # Temurin has JDK 25 for both linux and macos, x64 and arm64. The default
+  # Ubuntu apt repos do NOT carry openjdk-25, so download the tarball instead.
+  local existing
+  existing=$(find "$TOOLS_DIR" -maxdepth 1 -type d -name "jdk-${JDK_MAJOR}*" | head -1)
+  if [ -n "$existing" ]; then
+    export JAVA_HOME="$existing"
     return
   fi
-  sudo apt-get update
-  sudo apt-get install -y openjdk-25-jdk
-  export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
-}
 
-select_jdk_macos() {
-  # Buildkite macOS images ship multiple JDKs; pick 25.
-  JH=$(/usr/libexec/java_home -v 25 2>/dev/null || true)
-  if [ -z "$JH" ]; then
-    echo "JDK 25 not found on macOS agent; installing via brew"
-    brew install openjdk@25
-    JH=$(/usr/libexec/java_home -v 25)
+  local tos tarch
+  case "$os" in
+    Linux)  tos=linux ;;
+    Darwin) tos=mac ;;
+    *) echo "Unsupported OS for JDK install: $os"; exit 1 ;;
+  esac
+  case "$arch" in
+    x86_64)         tarch=x64 ;;
+    aarch64|arm64)  tarch=aarch64 ;;
+    *) echo "Unsupported arch for JDK install: $arch"; exit 1 ;;
+  esac
+
+  # Adoptium redirect API always resolves the latest GA build for the major.
+  local url="https://api.adoptium.net/v3/binary/latest/${JDK_MAJOR}/ga/${tos}/${tarch}/jdk/hotspot/normal/eclipse"
+  echo "Downloading Temurin JDK ${JDK_MAJOR} (${tos}/${tarch})"
+  curl -fsSL "$url" -o "$TOOLS_DIR/jdk.tar.gz"
+  tar -xzf "$TOOLS_DIR/jdk.tar.gz" -C "$TOOLS_DIR"
+  rm -f "$TOOLS_DIR/jdk.tar.gz"
+
+  local dir
+  dir=$(find "$TOOLS_DIR" -maxdepth 1 -type d -name "jdk-${JDK_MAJOR}*" | head -1)
+  # macOS tarballs nest the JDK under Contents/Home.
+  if [ "$os" = "Darwin" ] && [ -d "$dir/Contents/Home" ]; then
+    dir="$dir/Contents/Home"
   fi
-  export JAVA_HOME="$JH"
+  export JAVA_HOME="$dir"
 }
 
-case "$(uname -s)" in
-  Linux)  install_jdk_linux ;;
-  Darwin) select_jdk_macos ;;
-  *) echo "Unsupported OS: $(uname -s)"; exit 1 ;;
-esac
+install_maven() {
+  local mvn_home="$TOOLS_DIR/apache-maven-${MAVEN_VERSION}"
+  if [ ! -x "$mvn_home/bin/mvn" ]; then
+    echo "Downloading Apache Maven ${MAVEN_VERSION}"
+    curl -fsSL "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz" \
+      -o "$TOOLS_DIR/maven.tar.gz"
+    tar -xzf "$TOOLS_DIR/maven.tar.gz" -C "$TOOLS_DIR"
+    rm -f "$TOOLS_DIR/maven.tar.gz"
+  fi
+  export PATH="$mvn_home/bin:$PATH"
+}
+
+install_rust() {
+  # Only the lint leg needs Rust, but installing it everywhere is cheap when
+  # rustup is cached and keeps the prelude uniform. rust-toolchain.toml in
+  # core/rust/qdbr pins the exact toolchain; rustup honors it on first cargo use.
+  if ! command -v cargo >/dev/null 2>&1; then
+    if [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+      echo "Installing Rust via rustup"
+      curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
+    fi
+    export PATH="$HOME/.cargo/bin:$PATH"
+  fi
+}
+
+install_jdk
+install_maven
+install_rust
 
 export PATH="$JAVA_HOME/bin:$PATH"
 echo "Using JAVA_HOME=$JAVA_HOME"
 java -version
+mvn -version
+cargo --version || true
 
 git submodule update --init java-questdb-client
 
