@@ -71,6 +71,7 @@ ensure_rust() {
   # "cargo-fmt is not installed for the toolchain 'nightly-...'". Add the
   # components to every pinned channel found under core/rust, plus the default.
   rustup component add rustfmt clippy >/dev/null 2>&1 || true
+  local pinned_chan=""
   for tf in core/rust/qdb-core/rust-toolchain.toml core/rust/qdbr/rust-toolchain.toml core/rust/qdb-parquet-meta/rust-toolchain.toml; do
     [ -f "$tf" ] || continue
     chan=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$tf" | head -1)
@@ -78,7 +79,19 @@ ensure_rust() {
     echo "Ensuring rustfmt+clippy on pinned toolchain: $chan"
     rustup toolchain install "$chan" >/dev/null 2>&1 || true
     rustup component add --toolchain "$chan" rustfmt clippy >/dev/null 2>&1 || true
+    [ -z "$pinned_chan" ] && pinned_chan="$chan"
   done
+  # Make the pinned nightly the rustup default, mirroring Azure's
+  # prepare_rust_env.py (which installs the nightly as --default-toolchain).
+  # Not every lint crate carries a rust-toolchain.toml: qdb-parquet-meta has
+  # none, so `cd core/rust/qdb-parquet-meta && cargo clippy` would otherwise run
+  # under the agent image's default (a newer stable), whose clippy carries lints
+  # the pinned nightly lacks - a spurious divergence from Azure. Pinning the
+  # default keeps every crate on one clippy, matching Azure like-for-like.
+  if [ -n "$pinned_chan" ]; then
+    echo "Setting rustup default to pinned toolchain: $pinned_chan"
+    rustup default "$pinned_chan" >/dev/null 2>&1 || true
+  fi
 }
 
 install_client() {
