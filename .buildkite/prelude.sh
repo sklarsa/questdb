@@ -19,6 +19,21 @@ MAVEN_VERSION=3.9.9
 TOOLS_DIR="${TOOLS_DIR:-$HOME/.buildkite-tools}"
 mkdir -p "$TOOLS_DIR"
 
+# Force a UTF-8 locale before any JVM starts. The JVM derives sun.jnu.encoding
+# (the charset it uses to decode filenames from the OS) from LANG/LC_ALL at
+# startup. On a plain hosted agent LANG is unset, so sun.jnu.encoding becomes
+# ANSI_X3.4-1968 and Java's File.getName() mojibakes non-ASCII filenames -
+# FilesTest.testSoftLinkNonAsciiName then sees a Japanese name come back as 3x
+# its length (each UTF-8 byte decoded as one char). The custom image bakes
+# LANG=en_US.UTF-8 but builds fall back to the plain agent, so set it here.
+# C.UTF-8 needs no locale-gen and is present on modern glibc. Override unless
+# an existing locale is already UTF-8 (the image sets en_US.UTF-8; a plain
+# agent leaves LANG empty or C/POSIX, both of which must be replaced).
+case "${LC_ALL:-${LANG:-}}" in
+  *UTF-8|*UTF8|*utf-8|*utf8) : ;;
+  *) export LANG=C.UTF-8; export LC_ALL=C.UTF-8 ;;
+esac
+
 ensure_jdk() {
   # Prefer a baked-in JDK 25 (JAVA_HOME set by the image, or java on PATH).
   if [ -n "${JAVA_HOME:-}" ] && "$JAVA_HOME/bin/java" -version 2>&1 | grep -q "version \"25"; then
@@ -143,6 +158,10 @@ ensure_rust
 
 export PATH="$JAVA_HOME/bin:$PATH"
 echo "Using JAVA_HOME=$JAVA_HOME"
+echo "Locale: LANG=$LANG LC_ALL=$LC_ALL"
+# Confirm the JVM actually derives a UTF-8 sun.jnu.encoding from the locale;
+# this is the property that governs File.getName() decoding of non-ASCII names.
+java -XshowSettings:properties -version 2>&1 | grep -iE "sun.jnu.encoding|file.encoding" || true
 java -version
 mvn -version
 cargo --version || true
