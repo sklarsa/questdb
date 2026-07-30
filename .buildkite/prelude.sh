@@ -64,9 +64,21 @@ ensure_rust() {
     fi
     export PATH="$HOME/.cargo/bin:$PATH"
   fi
-  # rustfmt+clippy are required by the lint leg; add them if a baked/cached
-  # toolchain happens to lack them (no-op when already present).
+  # rustfmt+clippy are required by the lint leg. The lint crates pin a specific
+  # nightly via rust-toolchain.toml, and rustup installs that pinned toolchain
+  # WITHOUT components - so adding them to the default (stable) toolchain is not
+  # enough; cargo fmt inside the crate uses the nightly and fails with
+  # "cargo-fmt is not installed for the toolchain 'nightly-...'". Add the
+  # components to every pinned channel found under core/rust, plus the default.
   rustup component add rustfmt clippy >/dev/null 2>&1 || true
+  for tf in core/rust/qdb-core/rust-toolchain.toml core/rust/qdbr/rust-toolchain.toml core/rust/qdb-parquet-meta/rust-toolchain.toml; do
+    [ -f "$tf" ] || continue
+    chan=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$tf" | head -1)
+    [ -n "$chan" ] || continue
+    echo "Ensuring rustfmt+clippy on pinned toolchain: $chan"
+    rustup toolchain install "$chan" >/dev/null 2>&1 || true
+    rustup component add --toolchain "$chan" rustfmt clippy >/dev/null 2>&1 || true
+  done
 }
 
 install_client() {

@@ -65,9 +65,16 @@ ENV PATH=$JAVA_HOME/bin:$PATH
 ENV RUSTUP_HOME=/opt/rust/rustup \
     CARGO_HOME=/opt/rust/cargo \
     PATH=/opt/rust/cargo/bin:$PATH
+# The lint crates (qdb-core, qdbr) pin a nightly via rust-toolchain.toml and
+# rustup installs a pinned toolchain WITHOUT components, so rustfmt/clippy must
+# be added to that nightly, not just stable. Keep RUST_NIGHTLY in sync with
+# core/rust/*/rust-toolchain.toml (channel = "...").
+ENV RUST_NIGHTLY=nightly-2025-09-24
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --profile minimal --no-modify-path \
     && /opt/rust/cargo/bin/rustup component add rustfmt clippy \
+    && /opt/rust/cargo/bin/rustup toolchain install "$RUST_NIGHTLY" --profile minimal \
+    && /opt/rust/cargo/bin/rustup component add --toolchain "$RUST_NIGHTLY" rustfmt clippy \
     && chmod -R a+rwX /opt/rust
 
 # Warm the Maven wrapper/version so the first real build does not pay for it.
