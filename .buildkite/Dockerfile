@@ -58,11 +58,16 @@ ENV PATH=$JAVA_HOME/bin:$PATH
 # Rust system-wide, with the components the lint leg needs (rustfmt, clippy).
 # CARGO_HOME/RUSTUP_HOME are set to a world-readable path so the injected
 # runtime user (which we cannot change) can still run cargo.
+# Install rustup first, then add components via `rustup component add` (which
+# reliably takes a space-separated list) - passing --component to the rustup-init
+# installer is version-fragile and failed the image build with "unexpected
+# argument 'clippy'".
 ENV RUSTUP_HOME=/opt/rust/rustup \
     CARGO_HOME=/opt/rust/cargo \
     PATH=/opt/rust/cargo/bin:$PATH
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-      | sh -s -- -y --profile minimal --component rustfmt --component clippy \
+      | sh -s -- -y --profile minimal --no-modify-path \
+    && /opt/rust/cargo/bin/rustup component add rustfmt clippy \
     && chmod -R a+rwX /opt/rust
 
 # Warm the Maven wrapper/version so the first real build does not pay for it.
