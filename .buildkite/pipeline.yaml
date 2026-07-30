@@ -22,8 +22,15 @@ steps:
       echo "--- compile core (needed for bytecode check)"
       mvn $MVN_COMMON -pl core -am -DskipTests package
       echo "--- bytecode size check"
-      JAR_FILE=$(find core/target -maxdepth 1 -name "questdb-*.jar" ! -name "*-tests.jar" ! -name "*-sources.jar" ! -name "*-javadoc.jar" | head -1)
-      if [ -z "$JAR_FILE" ]; then echo "No QuestDB JAR found"; exit 1; fi
+      # Anchor to the checkout root, not the current directory. Buildkite does
+      # not guarantee the shell's CWD is the repo root at this point, so a
+      # relative `find core/target` can silently match nothing even though mvn
+      # just built the JAR. BUILDKITE_BUILD_CHECKOUT_PATH is the repo root.
+      TARGET_DIR="${BUILDKITE_BUILD_CHECKOUT_PATH:-$PWD}/core/target"
+      echo "Looking for JAR under: $TARGET_DIR"
+      ls -1 "$TARGET_DIR"/questdb-*.jar 2>/dev/null || echo "(no questdb-*.jar in $TARGET_DIR)"
+      JAR_FILE=$(find "$TARGET_DIR" -maxdepth 1 -name "questdb-*.jar" ! -name "*-tests.jar" ! -name "*-sources.jar" ! -name "*-javadoc.jar" | head -1)
+      if [ -z "$JAR_FILE" ]; then echo "No QuestDB JAR found under $TARGET_DIR"; exit 1; fi
       ./ci/check-bytecode-size.sh --jar "$JAR_FILE" --threshold 8000
 
   - label: ":coffee: test: griffin"
@@ -66,14 +73,19 @@ steps:
     # Compress the whole report tree into a single archive before upload so
     # it counts as one artifact. Uses the official artifacts plugin's
     # `compressed` option. Note: globs (* / **) do NOT work with `compressed`
-    # - `upload` must name the directory/file itself, which the plugin zips
-    # recursively into one archive.
+    # - `upload` must name the directory/file itself, which the plugin archives
+    # recursively into one file.
+    #
+    # Archive as .tgz, not .zip: the plugin shells out to `zip` for a .zip
+    # name, which is absent on plain hosted agents (only baked into the custom
+    # image). `.tgz` uses tar, which is always present, so the upload works
+    # whether or not the custom image is active.
     plugins:
       - artifacts#v1.9.4:
           upload:
             - "core/target/site/jacoco"
             - "core/target/jacoco.exec"
-          compressed: jacoco-report.zip
+          compressed: jacoco-report.tgz
     command: |
       source .buildkite/prelude.sh
       echo "--- pre-build core so coverage run has deps"
