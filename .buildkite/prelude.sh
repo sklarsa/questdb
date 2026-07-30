@@ -57,7 +57,9 @@ ensure_rust() {
   if ! command -v cargo >/dev/null 2>&1; then
     if [ ! -x "$HOME/.cargo/bin/cargo" ]; then
       echo "Rust not baked in; installing via rustup (with rustfmt + clippy)"
-      curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --component rustfmt clippy
+      # rustup-init needs a separate --component flag per component (unlike
+      # `rustup component add`, which takes a space-separated list).
+      curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --component rustfmt --component clippy
     fi
     export PATH="$HOME/.cargo/bin:$PATH"
   fi

@@ -62,7 +62,7 @@ ENV RUSTUP_HOME=/opt/rust/rustup \
     CARGO_HOME=/opt/rust/cargo \
     PATH=/opt/rust/cargo/bin:$PATH
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-      | sh -s -- -y --profile minimal --component rustfmt clippy \
+      | sh -s -- -y --profile minimal --component rustfmt --component clippy \
     && chmod -R a+rwX /opt/rust
 
 # Warm the Maven wrapper/version so the first real build does not pay for it.
