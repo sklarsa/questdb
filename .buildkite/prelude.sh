@@ -74,13 +74,27 @@ install_rust() {
   # Only the lint leg needs Rust, but installing it everywhere is cheap when
   # rustup is cached and keeps the prelude uniform. rust-toolchain.toml in
   # core/rust/qdbr pins the exact toolchain; rustup honors it on first cargo use.
-  if ! command -v cargo >/dev/null 2>&1; then
-    if [ ! -x "$HOME/.cargo/bin/cargo" ]; then
-      echo "Installing Rust via rustup"
-      curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
-    fi
-    export PATH="$HOME/.cargo/bin:$PATH"
+  # The lint leg runs `cargo fmt` and `cargo clippy`, so rustfmt+clippy must be
+  # present - the "minimal" profile omits both, so request them explicitly.
+  if [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+    echo "Installing Rust via rustup (with rustfmt + clippy)"
+    curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --component rustfmt clippy
   fi
+  export PATH="$HOME/.cargo/bin:$PATH"
+  # Ensure the components exist even if a cached rustup lacks them.
+  rustup component add rustfmt clippy >/dev/null 2>&1 || true
+}
+
+install_client() {
+  # `-P local-client` makes the core build depend on org.questdb:questdb-client
+  # at the -SNAPSHOT version, which lives only in the client submodule. Nobody
+  # publishes it, so build+install it into the local .m2 here (matches
+  # CLAUDE.md's "cd java-questdb-client && mvn clean install -DskipTests").
+  # --recursive: the client carries its own nested submodule (zstd).
+  git submodule update --init --recursive java-questdb-client
+  ( cd java-questdb-client && mvn -q clean install -DskipTests ) || {
+    echo "Failed to build/install java-questdb-client"; exit 1;
+  }
 }
 
 install_jdk
@@ -93,7 +107,8 @@ java -version
 mvn -version
 cargo --version || true
 
-git submodule update --init java-questdb-client
+# Build+install the client SNAPSHOT into .m2 (needs Maven+JDK on PATH above).
+install_client
 
 # Common Maven flags shared by every leg. Central-only, batch, local-client.
 export MVN_COMMON="--batch-mode -P local-client -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false"
