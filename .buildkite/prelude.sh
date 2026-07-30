@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Shared setup for every Buildkite step. Idempotent; safe to run per-step.
+# Scope: Linux x86_64 hosted agents only (macOS and arm64 are out of scope for
+# now).
 #
 # Preferred setup: run on the custom hosted-agent image built from
 # .buildkite/Dockerfile, which bakes in JDK 25, Maven, and Rust (with
@@ -17,9 +19,6 @@ MAVEN_VERSION=3.9.9
 TOOLS_DIR="${TOOLS_DIR:-$HOME/.buildkite-tools}"
 mkdir -p "$TOOLS_DIR"
 
-os=$(uname -s)
-arch=$(uname -m)
-
 ensure_jdk() {
   # Prefer a baked-in JDK 25 (JAVA_HOME set by the image, or java on PATH).
   if [ -n "${JAVA_HOME:-}" ] && "$JAVA_HOME/bin/java" -version 2>&1 | grep -q "version \"25"; then
@@ -33,16 +32,12 @@ ensure_jdk() {
   local existing
   existing=$(find "$TOOLS_DIR" -maxdepth 1 -type d -name "jdk-${JDK_MAJOR}*" | head -1)
   if [ -z "$existing" ]; then
-    local tos tarch
-    case "$os" in Linux) tos=linux ;; Darwin) tos=mac ;; *) echo "Unsupported OS: $os"; exit 1 ;; esac
-    case "$arch" in x86_64) tarch=x64 ;; aarch64|arm64) tarch=aarch64 ;; *) echo "Unsupported arch: $arch"; exit 1 ;; esac
-    echo "JDK 25 not baked in; downloading Temurin (${tos}/${tarch})"
-    curl -fsSL "https://api.adoptium.net/v3/binary/latest/${JDK_MAJOR}/ga/${tos}/${tarch}/jdk/hotspot/normal/eclipse" -o "$TOOLS_DIR/jdk.tar.gz"
+    echo "JDK 25 not baked in; downloading Temurin (linux/x64)"
+    curl -fsSL "https://api.adoptium.net/v3/binary/latest/${JDK_MAJOR}/ga/linux/x64/jdk/hotspot/normal/eclipse" -o "$TOOLS_DIR/jdk.tar.gz"
     tar -xzf "$TOOLS_DIR/jdk.tar.gz" -C "$TOOLS_DIR"
     rm -f "$TOOLS_DIR/jdk.tar.gz"
     existing=$(find "$TOOLS_DIR" -maxdepth 1 -type d -name "jdk-${JDK_MAJOR}*" | head -1)
   fi
-  if [ "$os" = "Darwin" ] && [ -d "$existing/Contents/Home" ]; then existing="$existing/Contents/Home"; fi
   export JAVA_HOME="$existing"
 }
 

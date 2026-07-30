@@ -1,5 +1,6 @@
-# Buildkite Linux + macOS smoke test for QuestDB core.
-# Static pipeline on hosted agents (clean-room, Maven from Central).
+# Buildkite Linux x86 smoke test for QuestDB core.
+# Static pipeline on hosted agents running the custom image
+# (.buildkite/Dockerfile), which bakes in JDK 25 + Maven + Rust.
 # See docs/superpowers/specs/2026-07-29-buildkite-linux-smoke-test-design.md
 steps:
   - label: ":lint-roller: lint"
@@ -69,13 +70,3 @@ steps:
         -Dtest.include='**/std/**'
       echo "--- jacoco report"
       mvn $MVN_COMMON -f core/pom.xml jacoco:report || true
-
-  - label: ":apple: test: griffin (macos)"
-    key: test-macos-griffin
-    agents:
-      queue: macos-large
-    artifact_paths:
-      - "core/target/surefire-reports/**/*.xml"
-    command: |
-      source .buildkite/prelude.sh
-      mvn $MVN_COMMON clean test -Dtest.include='**/griffin/**'
