@@ -12,9 +12,13 @@ steps:
       echo "--- unterminated log check"
       python3 find_unterminated_logs.py core/src --exclude=LogParanoiaTest.java
       echo "--- rust fmt + clippy"
-      for crate in qdb-core qdb-parquet-meta qdbr; do
-        ( cd core/rust/"$crate" && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings ) || exit 1
-      done
+      # Flat per-crate commands (no shell loop variable) - mirrors Azure
+      # rust-test-and-lint.yml. A `for crate in ...` loop expanded to an empty
+      # $crate under Buildkite's command wrapper, landing in core/rust (which
+      # has no Cargo.toml) and failing cargo fmt.
+      ( cd core/rust/qdb-core         && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
+      ( cd core/rust/qdb-parquet-meta && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
+      ( cd core/rust/qdbr             && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
       echo "--- compile core (needed for bytecode check)"
       mvn $MVN_COMMON -pl core -am -DskipTests package
       echo "--- bytecode size check"
