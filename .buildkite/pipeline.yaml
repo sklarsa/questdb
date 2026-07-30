@@ -8,14 +8,14 @@ steps:
     agents:
       queue: linux-small
     command: |
-      # Buildkite runs each line of this block as its own shell, so a shell
-      # variable set on one line (REPO_ROOT=..., JAR_FILE=$(...)) reads back
-      # empty on the next - that, not any CWD problem, is what kept the bytecode
-      # check from finding the JAR. Only two things survive across lines: real
-      # environment variables (from the agent or exported by a sourced file),
-      # and the current directory. So keep all CWD-dependent logic self-contained
-      # within a single line, and rely on relative paths from the checkout root
-      # (each line starts there) rather than a saved absolute path.
+      # Notes on this agent's shell, learned the hard way while getting the
+      # bytecode check green (see the check itself below):
+      #  - a plain shell variable set on one line can read back empty on the
+      #    next, so keep JAR_FILE and its use on a single line;
+      #  - `find core/target ... ! -name '*-tests.jar'` returned nothing even
+      #    though a plain glob listed the JARs, so the check uses a glob, not
+      #    find;
+      #  - $MVN_COMMON survives across lines only because prelude.sh exports it.
       source .buildkite/prelude.sh
       echo "--- unterminated log check"
       python3 find_unterminated_logs.py core/src --exclude=LogParanoiaTest.java
@@ -30,10 +30,14 @@ steps:
       echo "--- compile core (needed for bytecode check)"
       mvn $MVN_COMMON -pl core -am -DskipTests package
       echo "--- bytecode size check"
-      # Find the JAR and run the check in one line so JAR_FILE never has to
-      # survive a line boundary. Relative core/target resolves from the checkout
-      # root, which is the CWD at the start of every line.
-      JAR_FILE=$(find core/target -maxdepth 1 -name "questdb-*.jar" ! -name "*-tests.jar" ! -name "*-sources.jar" ! -name "*-javadoc.jar" | head -1); echo "JAR_FILE=[$JAR_FILE]"; test -n "$JAR_FILE" || { echo "No QuestDB JAR found in $(pwd)/core/target"; ls -la core/target 2>&1 | head; exit 1; }; ./ci/check-bytecode-size.sh --jar "$JAR_FILE" --threshold 8000
+      # Select the main JAR with a shell glob + case filter, not find. On the
+      # Buildkite agent `find core/target ... ! -name '*-tests.jar'` returned
+      # nothing even though `ls core/target/questdb-*.jar` on the same line
+      # listed both JARs - the glob works where find did not. Keep it all on one
+      # line so JAR_FILE never crosses a line boundary (Buildkite runs each line
+      # in its own shell). The case filter skips the tests/sources/javadoc JARs
+      # and picks the main artifact.
+      JAR_FILE=""; for f in core/target/questdb-*.jar; do [ -f "$f" ] || continue; case "$f" in *-tests.jar|*-sources.jar|*-javadoc.jar) continue;; esac; JAR_FILE="$f"; break; done; echo "JAR_FILE=[$JAR_FILE]"; test -n "$JAR_FILE" || { echo "No QuestDB JAR found in $(pwd)/core/target"; ls -la core/target 2>&1 | head; exit 1; }; ./ci/check-bytecode-size.sh --jar "$JAR_FILE" --threshold 8000
 
   - label: ":coffee: test: griffin"
     key: test-griffin
