@@ -1,0 +1,6 @@
+# Generator/runtime artifacts that must never be committed.
+__pycache__/
+*.pyc
+surefire-timings/
+# IntelliJ download dir used by the format leg.
+/.ci/
