@@ -100,3 +100,26 @@ steps:
         -Dtest.include='**/std/**'
       echo "--- jacoco report"
       mvn $MVN_COMMON -f core/pom.xml jacoco:report || true
+
+  - label: ":memo: javadoc"
+    key: javadoc
+    agents:
+      queue: linux-medium
+    command: |
+      source .buildkite/prelude.sh
+      echo "--- javadoc"
+      mvn $MVN_COMMON compile javadoc:javadoc -DskipTests -P javadoc -P qdbr-release
+
+  - label: ":handshake: compat"
+    key: compat
+    agents:
+      queue: linux-medium
+    artifact_paths:
+      - "compat/target/surefire-reports/**/*.xml"
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      source .buildkite/prelude.sh
+      echo "--- compat + cliutil tests"
+      mvn $MVN_COMMON clean test \
+        -Dtest.include='**/compat/**,**/cliutil/**' \
+        -Dout=$PWD/ci/qlog.conf
