@@ -132,4 +132,66 @@ what Azure did, the Buildkite mapping, what fought back + the fix, score.
 | 5 | docker-release-pipeline.yml: buildx multi-arch build of core/Dockerfile (questdb + rhel targets), pushed | Same two `docker build --target` invocations, no push, no registry login; init the client submodule for the local-client build context | Green first try. Docker daemon + buildx are present on the hosted agent (backed by a `remote:nsc-remote` Namespace builder), so no QEMU/daemon setup needed. questdb target built 25/25 stages in ~181s (full in-container mvn package + GraalVM + web console); rhel target 26/26 in ~3s off cached layers. Does not source prelude.sh - the Dockerfile builds the whole toolchain in-container, sidestepping every plain-agent gap. Cleanest chunk after 1. | 1 |
 | 6 | test-hosted-pipeline.yml (mac path): griffin shard on macOS | A macos-large step sourcing a brew-based macos-prelude.sh, running the griffin shard | Green first real run. macos-prelude.sh (apt->brew translation of prelude.sh) selected JDK 25.0.2 via Homebrew, built the client's libquestdb.dylib for darwin-aarch64 (CMake's ARCH_AARCH64 path, no nasm), and ran 989 griffin test classes to BUILD SUCCESS on the M4 (12 proc). The macos-large queue is a real hosted queue in the trial. No plain-agent gotchas here - macOS agents come with a working brew and the toolchain resolved cleanly. Only surface note: brew JDK path is /opt/homebrew/opt/openjdk/libexec/openjdk.jdk. | 2 |
 | 7 | self-hosted-cover-jobs.yml: 8-way JaCoCo matrix + LCOV/cover-checker merge | Buildkite `matrix:` of 8 shards (verbatim Azure include/exclude), each `-P jacoco,qdbr-coverage`, + a merge step via ci/jacoco-merge.xml (-DincludeRoot) | PARTIAL - matrix STRUCTURE verified (griffin shards ran; YAML/patterns/merge wiring correct), but the 4 heavy shards (fuzz2, cairo-root, cairo-sub, pgwire) all failed at a tight 49.7-51.5 min cluster = the Buildkite hosted-agent ~50min DEFAULT JOB CAP (no pipeline timeout is set). Instrumented cairo/fuzz/pgwire runs on the slow PLAIN agent (toolchain re-downloaded each run, JaCoCo overhead, only 4 agents so shards serialize 2-deep) can't finish in the cap. Also proven: trial has only 4 hosted agents, so an 8-shard matrix is capacity-bound. Not a matrix-logic bug. Fixes: pin the custom image (saves the ~8-10min toolchain download/shard - blocked on agentImageRef, see chunk-2 follow-up), use linux-large, split heavy shards finer, or raise the job timeout. | 4 (infra-bound) |
-| 8 | | | | |
+| 8 | check-changes-job.yml (change detection) + NEW runtime-weighted sharding | Python `generate.py` (bin-pack by surefire per-class time, median fallback, change detection) + `fetch_timings.py`, emitted via a bootstrap that `buildkite-agent pipeline upload`s; static-pipeline fallback on any error | Core built and unit-verified locally: 12 tests pass; dry-run over 1744 discovered classes with real build-#25 timings balanced 4 shards to 0.4% wall-time spread; with no timings it degrades to exact count-balance (436/436/436/436). Two integration notes, both follow-ups not blockers: (a) in-job timing fetch needs a REST token as a Buildkite SECRET - the agent access token cannot call the REST API, so without the secret the generator uses count-balanced sharding; (b) Buildkite trial artifact retention appears short - build #25's surefire XMLs were already ungettable when fetched later, so weighted sharding needs a fresh green build's artifacts. In-Buildkite bootstrap run still pending (agent + rate-limit contention). | 3 (core done, wiring pending) |
+
+## Final evaluation: Buildkite vs Azure for QuestDB OSS CI
+
+Written 2026-07-31 after the breadth-first port. Level-headed: the wins and the
+costs both get equal weight.
+
+### What ported cleanly (Buildkite is a good fit here)
+- **Simple Maven legs** (compat, javadoc): trivial, green first try.
+- **Docker build**: the single best result. Hosted agents ship a working docker +
+  buildx backed by a `remote:nsc-remote` builder; a full in-container build
+  (mvn package + GraalVM + web console) ran in ~3 min with no daemon/QEMU setup.
+- **macOS**: `macos-large` (M4, arm64) worked first try - brew toolchain, native
+  `.dylib`, 989 griffin classes green. Real, usable macOS capacity on the trial.
+- **Scheduled jobs**: work, but the model differs (see costs).
+- **Dynamic pipelines**: the `pipeline upload` mechanism is clean and made the
+  weighted-sharding generator straightforward; the key measured win (griffin is
+  57% of classes but ~1/3 of cairo's wall time) is directly addressable.
+
+### What cost real effort (Buildkite friction, mostly hosted-agent env)
+- **The custom agent image was never attached to the queues** (`agent_image_ref:
+  null`), so every build ran on the PLAIN base agent. This one misconfiguration
+  caused most of the pain below, and pinning it is **blocked**: `agentImageRef`
+  is a Buildkite feature "under development" that needs enabling by their support
+  (REST silently no-ops it; GraphQL rejects it). This is the top action item.
+- **The plain agent is hostile**: no `wget`; `/usr` is a separate mount (breaks
+  `find -xdev`); `/usr/lib` is a symlink (breaks symlink-naive `find`); and -
+  the big one - **a non-exported shell var set on one line reads back empty on
+  the next line** in the `command:` block (only `export`ed vars survive). That
+  last quirk cost the most: it sank the format leg (`IDEA_ROOT` empty) and is the
+  most likely real cause of the 10-build jemalloc saga (`JEM=$(...)` empty next
+  line). Hardening rule: inline paths, keep set-and-use on one line, or export.
+- **Job time cap**: hosted agents kill a job at ~50 min. The instrumented
+  coverage shards blew past it on the slow/small `linux-medium` agent; moving to
+  `linux-large` cut cairo-root from a 50-min timeout to **8.7 min**. Coverage
+  must run on large agents.
+- **Capacity**: the trial has **4 concurrent agents**, so an 8-shard matrix
+  serializes 2-deep. Fine for an eval; a production port needs more agents.
+- **Schedules and secrets are pipeline-level API objects**, not in-YAML like
+  Azure `schedules:`. More moving parts; a scheduled job needs its own pipeline.
+- **jemalloc**: deferred - a genuinely unexplained hosted-agent fs-visibility
+  quirk (very possibly the same non-exported-var issue). Not worth more grinding
+  until the custom image is pinned.
+
+### Net read
+Buildkite is a credible replacement and several things (docker, macOS, dynamic
+pipelines) are nicer than the Azure/Hetzner status quo. But the plain-agent
+environment is fragile enough that **the whole port hinges on pinning the custom
+image** - once `agentImageRef` is enabled and attached, most of the friction
+above (slow preludes, missing wget, likely jemalloc, the coverage timeouts)
+should evaporate, because builds start warm with tools baked in. Recommend:
+(1) email support@buildkite.com to enable `agentImageRef`; (2) size coverage on
+`linux-large`; (3) add a REST token secret for weighted sharding; (4) revisit
+jemalloc on the custom image. Only after (1) is a fair head-to-head timing
+comparison against Azure meaningful - every number here carries the
+plain-agent tax.
+
+### Follow-up items (tracked)
+- [ ] Enable + attach `agentImageRef` (custom image `linux-x86-test`) to the linux queues.
+- [ ] Add a Buildkite secret with a read_builds+read_artifacts REST token for `fetch_timings.py`.
+- [ ] Re-enable the jemalloc coverage leg on the custom image (or bake libjemalloc in).
+- [ ] Run coverage shards on `linux-large`; consider splitting the heaviest.
+- [ ] Re-add the deferred cover-checker diff-coverage GitHub posting, the enterprise REST trigger, Windows, and arm64/zfs/graal Linux variants.
