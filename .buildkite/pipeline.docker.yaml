@@ -1,0 +1,21 @@
+# Throwaway: runs ONLY the docker build (no push) for fast isolated verification.
+# Mirrors Azure ci/docker-release-pipeline.yml but builds only - never pushes,
+# no registry login. Builds core/Dockerfile's default (questdb) and rhel targets.
+steps:
+  - label: ":docker: docker build (no push)"
+    key: docker-build
+    agents:
+      queue: linux-large
+    command: |
+      set -euo pipefail
+      echo "--- docker availability probe"
+      docker version
+      docker buildx version || echo "buildx not present (single-arch docker build is fine)"
+      echo "--- init client submodule (core/Dockerfile's local-client build context needs it)"
+      git submodule update --init --recursive java-questdb-client
+      echo "--- build questdb image (native arch, no push)"
+      docker build -f core/Dockerfile --target questdb -t questdb-ci:local .
+      echo "--- build rhel image (native arch, no push)"
+      docker build -f core/Dockerfile --target rhel -t questdb-ci:local-rhel .
+      echo "--- built images"
+      docker images | grep questdb-ci || true
