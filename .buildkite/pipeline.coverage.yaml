@@ -12,7 +12,11 @@ steps:
       - label: ":bar_chart: cov {{matrix}}"
         key: "coverage"
         agents:
-          queue: linux-medium
+          # linux-large, NOT medium: on medium (4 vCPU/16GB) the instrumented
+          # cairo/fuzz/pgwire shards crawled and hit the ~50min hosted-agent job
+          # cap. On large (8 vCPU/32GB) cairo-root ran in 8.7min (proven by the
+          # covone test) - a 5-6x speedup, comfortably under the cap.
+          queue: linux-large
         matrix:
           - "griffin-root"
           - "griffin-sub"
