@@ -7,9 +7,28 @@ steps:
       queue: linux-medium
     command: |
       source .buildkite/prelude.sh
-      JEM=$(locate_jemalloc)
+      # Install + resolve libjemalloc INLINE (not via a function in a command
+      # substitution). Earlier attempts wrapped this in locate_jemalloc and
+      # called it as JEM=$(locate_jemalloc) under the prelude's set -euo
+      # pipefail; the install ran but the post-install lookup and even the
+      # diagnostics produced no output, so JEM stayed empty. Doing it flat here,
+      # with set +e around apt, removes that whole failure class.
+      set +e
+      if ! ls /usr/lib/*/libjemalloc.so* /usr/lib/libjemalloc.so* >/dev/null 2>&1; then
+        echo "--- installing libjemalloc2"
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends libjemalloc2
+        sudo ldconfig
+      fi
+      JEM=$(ls /usr/lib/*/libjemalloc.so.2 /usr/lib/libjemalloc.so.2 2>/dev/null | head -1)
+      set -e
       echo "--- jemalloc path: ${JEM:-NONE}"
-      test -n "$JEM" || { echo "libjemalloc not found"; exit 1; }
+      if [ -z "$JEM" ]; then
+        echo "libjemalloc not found; diagnostics:"
+        dpkg -L libjemalloc2 2>&1 | grep -i jemalloc || true
+        find / -name 'libjemalloc*' 2>/dev/null || true
+        exit 1
+      fi
       echo "--- pre-build core so coverage run has deps"
       mvn $MVN_COMMON -pl core -am -DskipTests install
       echo "--- instrumented std slice under jemalloc LD_PRELOAD"
