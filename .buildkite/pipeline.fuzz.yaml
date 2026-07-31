@@ -1,0 +1,23 @@
+# Scheduled fuzz run. Mirrors Azure ci/test-fuzz.yml, which runs on a cron
+# (every 15 min on master) rather than per-PR. Runs the Fuzz-matching test
+# classes across the full reactor on a large Linux agent.
+#
+# This is a SEPARATE pipeline from the per-PR one: point a dedicated Buildkite
+# pipeline (e.g. questdb-fuzz) at this file and attach a schedule to it (the
+# schedule is a pipeline setting, configured via the REST API / UI, not in this
+# YAML). See .buildkite/README or the workflow-port design doc for the cronline.
+#
+# Azure used the surefire regex includeTests: %regex[.*Fuzz.*class]; the -Dtest
+# selector below is the like-for-like equivalent and matches the ~110 *Fuzz*
+# classes under core plus the compat fuzz tests.
+steps:
+  - label: ":game_die: fuzz"
+    key: fuzz
+    agents:
+      queue: linux-large
+    artifact_paths:
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      source .buildkite/prelude.sh
+      echo "--- fuzz test classes (full reactor)"
+      mvn $MVN_COMMON clean test -Dtest='*Fuzz*' -Dout=$PWD/ci/qlog.conf
