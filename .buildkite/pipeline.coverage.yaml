@@ -1,0 +1,75 @@
+# Throwaway: the 8-way coverage matrix + merge, for fast isolated verification.
+# Mirrors Azure self-hosted-cover-jobs.yml's shard split (griffin-root/sub,
+# fuzz1/2, cairo-root/sub, pgwire, other), each instrumented with
+# -P jacoco,qdbr-coverage. Runs WITHOUT the jemalloc LD_PRELOAD (chunk 2 is
+# deferred) - still valid coverage, just not exercising the native allocator.
+#
+# Each shard copies its jacoco.exec to a per-shard name and uploads it; the
+# merge step downloads them all and produces one combined report.
+steps:
+  - group: ":bar_chart: coverage matrix"
+    steps:
+      - label: ":bar_chart: cov {{matrix}}"
+        key: "coverage"
+        agents:
+          queue: linux-medium
+        matrix:
+          - "griffin-root"
+          - "griffin-sub"
+          - "fuzz1"
+          - "fuzz2"
+          - "cairo-root"
+          - "cairo-sub"
+          - "pgwire"
+          - "other"
+        artifact_paths:
+          - "core/target/jacoco-{{matrix}}.exec"
+        command: |
+          source .buildkite/prelude.sh
+          echo "--- pre-build core so the instrumented run has deps"
+          mvn $MVN_COMMON -pl core -am -DskipTests install
+          # Per-shard include/exclude, copied verbatim from Azure
+          # self-hosted-cover-jobs.yml. Assigned by the matrix value.
+          INC=""; EXC=""
+          case "{{matrix}}" in
+            griffin-root) INC="**/griffin/*" ;;
+            griffin-sub)  INC="**/griffin/**/*"; EXC="**/griffin/*" ;;
+            fuzz1)        INC="**/cairo/fuzz/**" ;;
+            fuzz2)        INC="**/O3*Test**,**/**Fuzz**"; EXC="**/cairo/fuzz/**" ;;
+            cairo-root)   INC="**/cairo/*"; EXC="**/O3*Test**,**/**Fuzz**" ;;
+            cairo-sub)    INC="**/cairo/**/*"; EXC="**/cairo/*,**/O3*Test**,**/**Fuzz**" ;;
+            pgwire)       INC="**/pgwire/**/*.java" ;;
+            other)        EXC="**/griffin/**,**/cairo/**,**/pgwire/**" ;;
+          esac
+          echo "--- coverage shard {{matrix}}: include=[$INC] exclude=[$EXC]"
+          # Build the include/exclude flags on ONE line each (a var set on one
+          # line reads empty on the next in this command wrapper).
+          if [ -n "$INC" ] && [ -n "$EXC" ]; then
+            mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.include="$INC" -Dtest.exclude="$EXC"
+          elif [ -n "$INC" ]; then
+            mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.include="$INC"
+          else
+            mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.exclude="$EXC"
+          fi
+          cp core/target/jacoco.exec core/target/jacoco-{{matrix}}.exec
+
+  - label: ":bar_chart: coverage merge"
+    key: "coverage-merge"
+    depends_on: "coverage"
+    agents:
+      queue: linux-medium
+    plugins:
+      - artifacts#v1.9.4:
+          download: "core/target/jacoco-*.exec"
+    command: |
+      source .buildkite/prelude.sh
+      echo "--- downloaded per-shard exec files:"
+      ls -la core/target/jacoco-*.exec || { echo "no exec files downloaded"; exit 1; }
+      echo "--- build core classes so the report step has ../core/target/classes"
+      mvn $MVN_COMMON -pl core -am -DskipTests install
+      echo "--- merge exec files + build combined report (ci/jacoco-merge.xml)"
+      # jacoco-merge.xml merges **/*.exec from -DincludeRoot then reports against
+      # ../core/target/classes. Point includeRoot at core/target where the
+      # downloaded jacoco-*.exec files landed.
+      mvn $MVN_COMMON -f ci/jacoco-merge.xml verify -DincludeRoot=core/target
+      echo "--- combined report at core/target/classes (fork eval: NOT posted to any PR)"
