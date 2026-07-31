@@ -14,7 +14,7 @@ steps:
       # repo checkout and stays put.
       echo "--- download pinned IntelliJ (2GB; hosted agents have no persistent tool cache)"
       rm -rf .ci/intellij && mkdir -p .ci/intellij
-      wget -q "https://download.jetbrains.com/idea/idea-2026.1.4.tar.gz" -O intellij.tar.gz
+      curl -fsSL "https://download.jetbrains.com/idea/idea-2026.1.4.tar.gz" -o intellij.tar.gz
       tar xzf intellij.tar.gz -C .ci/intellij && rm intellij.tar.gz
       ( cd .ci/intellij && ln -s idea-* idea )
       echo "--- apply formatting in place"
