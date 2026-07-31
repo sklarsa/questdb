@@ -1,0 +1,15 @@
+# Dynamic-pipeline bootstrap. Fetches the last green build's surefire timings,
+# runs generate.py to emit a weighted/change-detected pipeline, and uploads it.
+# The generator falls back to the committed static pipeline on any error, so a
+# generator or fetch failure can never fail the build.
+steps:
+  - label: ":pipeline: generate"
+    agents:
+      queue: linux-small
+    command: |
+      set -uo pipefail
+      echo "--- fetch last green build's surefire timings (best-effort)"
+      BUILDKITE_API_TOKEN="${BUILDKITE_AGENT_ACCESS_TOKEN:-}" \
+        python3 .buildkite/fetch_timings.py || true
+      echo "--- generate + upload dynamic pipeline (static fallback on error)"
+      python3 .buildkite/generate.py | buildkite-agent pipeline upload
