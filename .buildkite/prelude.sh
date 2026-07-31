@@ -152,17 +152,35 @@ install_client() {
   }
 }
 
+_find_jemalloc_path() {
+  # Resolve libjemalloc's path without trusting the ldconfig cache. The Ubuntu
+  # libjemalloc2 package ships the versioned /usr/lib/.../libjemalloc.so.2 and
+  # runs `ldconfig` in a libc-bin trigger, but the refreshed cache is not always
+  # visible to a follow-up `ldconfig -p` in the same step (this is exactly what
+  # made the jemalloc leg fail on build #26: apt installed the package, yet
+  # `ldconfig -p | grep libjemalloc` still came back empty). Query the cache
+  # first (fast when present) then fall back to a filesystem search, which is
+  # deterministic and immune to the cache-timing race.
+  local p
+  p=$(ldconfig -p 2>/dev/null | grep -m1 'libjemalloc\.so' | awk '{print $NF}')
+  if [ -z "$p" ] || [ ! -e "$p" ]; then
+    p=$(find /usr/lib /lib -name 'libjemalloc.so*' 2>/dev/null | sort | head -1)
+  fi
+  echo "$p"
+}
+
 locate_jemalloc() {
-  # Echo the path to libjemalloc.so, installing it if missing. Used only by the
+  # Echo the path to libjemalloc, installing it if missing. Used only by the
   # jemalloc coverage leg to LD_PRELOAD the native allocator under instrumentation
   # (mirrors Azure self-hosted-cover-jobs.yml). All chatter goes to stderr so the
   # caller can capture a clean path from stdout.
   local p
-  p=$(ldconfig -p 2>/dev/null | grep -m1 'libjemalloc\.so' | awk '{print $NF}')
+  p=$(_find_jemalloc_path)
   if [ -z "$p" ] && command -v apt-get >/dev/null 2>&1; then
     echo "jemalloc not present; installing libjemalloc2" >&2
     sudo apt-get update >&2 && sudo apt-get install -y --no-install-recommends libjemalloc2 >&2
-    p=$(ldconfig -p 2>/dev/null | grep -m1 'libjemalloc\.so' | awk '{print $NF}')
+    sudo ldconfig >&2 2>&1 || true
+    p=$(_find_jemalloc_path)
   fi
   echo "$p"
 }
