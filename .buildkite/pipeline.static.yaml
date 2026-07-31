@@ -1,0 +1,191 @@
+# Buildkite Linux x86 smoke test for QuestDB core.
+# Static pipeline on hosted agents running the custom image
+# (.buildkite/Dockerfile), which bakes in JDK 25 + Maven + Rust.
+# See docs/superpowers/specs/2026-07-29-buildkite-linux-smoke-test-design.md
+steps:
+  - label: ":lint-roller: lint"
+    key: lint
+    agents:
+      queue: linux-small
+    command: |
+      # Notes on this agent's shell, learned the hard way while getting the
+      # bytecode check green (see the check itself below):
+      #  - a plain shell variable set on one line can read back empty on the
+      #    next, so keep JAR_FILE and its use on a single line;
+      #  - `find core/target ... ! -name '*-tests.jar'` returned nothing even
+      #    though a plain glob listed the JARs, so the check uses a glob, not
+      #    find;
+      #  - $MVN_COMMON survives across lines only because prelude.sh exports it.
+      source .buildkite/prelude.sh
+      echo "--- unterminated log check"
+      python3 find_unterminated_logs.py core/src --exclude=LogParanoiaTest.java
+      echo "--- rust fmt + clippy"
+      # Flat per-crate commands (no shell loop variable) - mirrors Azure
+      # rust-test-and-lint.yml. A `for crate in ...` loop expanded to an empty
+      # $crate under Buildkite's command wrapper, landing in core/rust (which
+      # has no Cargo.toml) and failing cargo fmt.
+      ( cd core/rust/qdb-core         && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
+      ( cd core/rust/qdb-parquet-meta && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
+      ( cd core/rust/qdbr             && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
+      echo "--- compile core (needed for bytecode check)"
+      mvn $MVN_COMMON -pl core -am -DskipTests package
+      echo "--- bytecode size check"
+      # Pass the directory and let check-bytecode-size.sh discover the JAR. The
+      # `*` glob to skip the tests/sources/javadoc JARs must run inside the
+      # script's real shell: Buildkite's inline command wrapper eats `*` in a
+      # pipeline command block, so both a bare glob and `find -name 'questdb-*'`
+      # came back empty here even though `ls core/target` listed the JARs.
+      ./ci/check-bytecode-size.sh --jar-dir core/target --threshold 8000
+
+  - label: ":coffee: test: griffin"
+    key: test-griffin
+    agents:
+      queue: linux-large
+    artifact_paths:
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      source .buildkite/prelude.sh
+      mvn $MVN_COMMON clean test -Dtest.include='**/griffin/**'
+
+  - label: ":coffee: test: cairo"
+    key: test-cairo
+    agents:
+      queue: linux-large
+    artifact_paths:
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      source .buildkite/prelude.sh
+      mvn $MVN_COMMON clean test -Dtest.include='**/cairo/**'
+
+  - label: ":coffee: test: other"
+    key: test-other
+    agents:
+      queue: linux-medium
+    artifact_paths:
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      source .buildkite/prelude.sh
+      mvn $MVN_COMMON clean test \
+        -Dtest.exclude='**/griffin/**,**/cairo/**,**/compat/**,**/cliutil/**,**/ServerMainTest.java'
+
+  - label: ":bar_chart: coverage (proof-of-path)"
+    key: coverage
+    agents:
+      queue: linux-medium
+    # The JaCoCo HTML report emits one file per class - thousands of small
+    # files, well over Buildkite's hard limit of 5000 artifacts per job.
+    # Compress the whole report tree into a single archive before upload so
+    # it counts as one artifact. Uses the official artifacts plugin's
+    # `compressed` option. Note: globs (* / **) do NOT work with `compressed`
+    # - `upload` must name the directory/file itself, which the plugin archives
+    # recursively into one file.
+    #
+    # Archive as .tgz, not .zip: the plugin shells out to `zip` for a .zip
+    # name, which is absent on plain hosted agents (only baked into the custom
+    # image). `.tgz` uses tar, which is always present, so the upload works
+    # whether or not the custom image is active.
+    plugins:
+      - artifacts#v1.9.4:
+          upload:
+            - "core/target/site/jacoco"
+            - "core/target/jacoco.exec"
+          compressed: jacoco-report.tgz
+    command: |
+      source .buildkite/prelude.sh
+      echo "--- pre-build core so coverage run has deps"
+      mvn $MVN_COMMON -pl core -am -DskipTests install
+      echo "--- instrumented test slice (std package) with jacoco"
+      mvn $MVN_COMMON -f core/pom.xml test \
+        -P jacoco,qdbr-coverage \
+        -Dtest.include='**/std/**'
+      echo "--- jacoco report"
+      mvn $MVN_COMMON -f core/pom.xml jacoco:report || true
+
+  - label: ":art: format (intellij)"
+    key: format
+    agents:
+      queue: linux-medium
+    command: |
+      source .buildkite/prelude.sh
+      # Use a RELATIVE dir (.ci/intellij) with no cross-line shell variable: a
+      # plain var set on one line reads back empty on the next in Buildkite's
+      # command wrapper (the same gotcha the lint step documents), which made an
+      # earlier IDEA_ROOT="$PWD/..." / "$(pwd)/..." expand to empty and
+      # `mkdir ''` fail. Relative paths resolve fine since the step's cwd is the
+      # repo checkout and stays put.
+      echo "--- download pinned IntelliJ (2GB; hosted agents have no persistent tool cache)"
+      rm -rf .ci/intellij && mkdir -p .ci/intellij
+      curl -fsSL "https://download.jetbrains.com/idea/idea-2026.1.4.tar.gz" -o intellij.tar.gz
+      tar xzf intellij.tar.gz -C .ci/intellij && rm intellij.tar.gz
+      ( cd .ci/intellij && ln -s idea-* idea )
+      echo "--- apply formatting in place"
+      ./.ci/intellij/idea/bin/idea.sh format -s .idea/codeStyles/Project.xml -m "*.java" -r .
+      echo "--- reset submodules the formatter may have touched"
+      git submodule foreach --quiet 'git checkout -- . 2>/dev/null; git clean -fd 2>/dev/null' || true
+      echo "--- fail if the formatter changed anything"
+      git status -s
+      git diff --exit-code
+
+  - label: ":memo: javadoc"
+    key: javadoc
+    agents:
+      queue: linux-medium
+    command: |
+      source .buildkite/prelude.sh
+      echo "--- javadoc"
+      mvn $MVN_COMMON compile javadoc:javadoc -DskipTests -P javadoc -P qdbr-release
+
+  - label: ":docker: docker build (no push)"
+    key: docker-build
+    agents:
+      queue: linux-large
+    # Does NOT source prelude.sh: core/Dockerfile builds the whole toolchain
+    # in-container, so the host only needs docker (present, backed by a
+    # remote:nsc-remote builder) + the client submodule for the local-client
+    # build context. Builds only - never pushes, no registry login.
+    command: |
+      set -euo pipefail
+      echo "--- docker availability probe"
+      docker version
+      docker buildx version || echo "buildx not present (plain docker build is fine)"
+      echo "--- init client submodule (local-client build context)"
+      git submodule update --init --recursive java-questdb-client
+      echo "--- build questdb image (native arch, no push)"
+      docker build -f core/Dockerfile --target questdb -t questdb-ci:local .
+      echo "--- build rhel image (native arch, no push)"
+      docker build -f core/Dockerfile --target rhel -t questdb-ci:local-rhel .
+
+  - label: ":apple: test: griffin (macos)"
+    key: test-griffin-macos
+    agents:
+      queue: macos-large
+    artifact_paths:
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      source .buildkite/macos-prelude.sh
+      mvn $MVN_COMMON clean test -Dtest.include='**/griffin/**'
+
+  # NOTE: the jemalloc LD_PRELOAD coverage leg (Azure self-hosted-cover-jobs.yml)
+  # is deliberately NOT included yet - see docs/superpowers/specs/
+  # 2026-07-31-buildkite-workflow-port-design.md, chunk 2. On these hosted
+  # agents libjemalloc2 installs to /usr/lib/x86_64-linux-gnu/libjemalloc.so.2
+  # (confirmed by in-step dpkg -L/find diagnostics) yet every resolver - ls glob,
+  # ldconfig -p, find variants, and even a bare `test -e <exact path>` - returned
+  # empty when run in the step's command shell, while the identical lookup in the
+  # diagnostics block succeeded. Root cause is an unresolved hosted-agent
+  # filesystem-visibility quirk, tracked as a follow-up. The proof-of-path
+  # coverage leg above already exercises the JaCoCo/qdbr-coverage path.
+
+  - label: ":handshake: compat"
+    key: compat
+    agents:
+      queue: linux-medium
+    artifact_paths:
+      - "compat/target/surefire-reports/**/*.xml"
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      source .buildkite/prelude.sh
+      echo "--- compat + cliutil tests"
+      mvn $MVN_COMMON clean test \
+        -Dtest.include='**/compat/**,**/cliutil/**' \
+        -Dout=$(pwd)/ci/qlog.conf
