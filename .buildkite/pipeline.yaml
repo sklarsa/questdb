@@ -101,6 +101,26 @@ steps:
       echo "--- jacoco report"
       mvn $MVN_COMMON -f core/pom.xml jacoco:report || true
 
+  - label: ":art: format (intellij)"
+    key: format
+    agents:
+      queue: linux-medium
+    command: |
+      source .buildkite/prelude.sh
+      IDEA_ROOT="$PWD/.ci/intellij"
+      rm -rf "$IDEA_ROOT"; mkdir -p "$IDEA_ROOT"
+      echo "--- download pinned IntelliJ (2GB; hosted agents have no persistent tool cache)"
+      wget -q "https://download.jetbrains.com/idea/idea-2026.1.4.tar.gz" -O intellij.tar.gz
+      tar xzf intellij.tar.gz -C "$IDEA_ROOT"; rm intellij.tar.gz
+      ( cd "$IDEA_ROOT" && ln -s idea-* idea )
+      echo "--- apply formatting in place"
+      "$IDEA_ROOT/idea/bin/idea.sh" format -s .idea/codeStyles/Project.xml -m "*.java" -r .
+      echo "--- reset submodules the formatter may have touched"
+      git submodule foreach --quiet 'git checkout -- . 2>/dev/null; git clean -fd 2>/dev/null' || true
+      echo "--- fail if the formatter changed anything"
+      git status -s
+      git diff --exit-code
+
   - label: ":memo: javadoc"
     key: javadoc
     agents:
