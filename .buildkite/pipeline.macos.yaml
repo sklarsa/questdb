@@ -1,0 +1,13 @@
+# Throwaway: runs the griffin shard on macos-large for fast isolated
+# verification of the macOS ARM64 toolchain (brew JDK/Maven/cmake + the
+# darwin-aarch64 client native build). Mirrors the deferred design-doc plan.
+steps:
+  - label: ":apple: test: griffin (macos)"
+    key: test-griffin-macos
+    agents:
+      queue: macos-large
+    artifact_paths:
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      source .buildkite/macos-prelude.sh
+      mvn $MVN_COMMON clean test -Dtest.include='**/griffin/**'
