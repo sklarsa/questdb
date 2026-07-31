@@ -135,6 +135,26 @@ steps:
       echo "--- javadoc"
       mvn $MVN_COMMON compile javadoc:javadoc -DskipTests -P javadoc -P qdbr-release
 
+  - label: ":docker: docker build (no push)"
+    key: docker-build
+    agents:
+      queue: linux-large
+    # Does NOT source prelude.sh: core/Dockerfile builds the whole toolchain
+    # in-container, so the host only needs docker (present, backed by a
+    # remote:nsc-remote builder) + the client submodule for the local-client
+    # build context. Builds only - never pushes, no registry login.
+    command: |
+      set -euo pipefail
+      echo "--- docker availability probe"
+      docker version
+      docker buildx version || echo "buildx not present (plain docker build is fine)"
+      echo "--- init client submodule (local-client build context)"
+      git submodule update --init --recursive java-questdb-client
+      echo "--- build questdb image (native arch, no push)"
+      docker build -f core/Dockerfile --target questdb -t questdb-ci:local .
+      echo "--- build rhel image (native arch, no push)"
+      docker build -f core/Dockerfile --target rhel -t questdb-ci:local-rhel .
+
   # NOTE: the jemalloc LD_PRELOAD coverage leg (Azure self-hosted-cover-jobs.yml)
   # is deliberately NOT included yet - see docs/superpowers/specs/
   # 2026-07-31-buildkite-workflow-port-design.md, chunk 2. On these hosted
