@@ -107,14 +107,19 @@ steps:
       queue: linux-medium
     command: |
       source .buildkite/prelude.sh
-      IDEA_ROOT="$(pwd)/.ci/intellij"
-      rm -rf "$IDEA_ROOT"; mkdir -p "$IDEA_ROOT"
+      # Use a RELATIVE dir (.ci/intellij) with no cross-line shell variable: a
+      # plain var set on one line reads back empty on the next in Buildkite's
+      # command wrapper (the same gotcha the lint step documents), which made an
+      # earlier IDEA_ROOT="$PWD/..." / "$(pwd)/..." expand to empty and
+      # `mkdir ''` fail. Relative paths resolve fine since the step's cwd is the
+      # repo checkout and stays put.
       echo "--- download pinned IntelliJ (2GB; hosted agents have no persistent tool cache)"
+      rm -rf .ci/intellij && mkdir -p .ci/intellij
       wget -q "https://download.jetbrains.com/idea/idea-2026.1.4.tar.gz" -O intellij.tar.gz
-      tar xzf intellij.tar.gz -C "$IDEA_ROOT"; rm intellij.tar.gz
-      ( cd "$IDEA_ROOT" && ln -s idea-* idea )
+      tar xzf intellij.tar.gz -C .ci/intellij && rm intellij.tar.gz
+      ( cd .ci/intellij && ln -s idea-* idea )
       echo "--- apply formatting in place"
-      "$IDEA_ROOT/idea/bin/idea.sh" format -s .idea/codeStyles/Project.xml -m "*.java" -r .
+      ./.ci/intellij/idea/bin/idea.sh format -s .idea/codeStyles/Project.xml -m "*.java" -r .
       echo "--- reset submodules the formatter may have touched"
       git submodule foreach --quiet 'git checkout -- . 2>/dev/null; git clean -fd 2>/dev/null' || true
       echo "--- fail if the formatter changed anything"
