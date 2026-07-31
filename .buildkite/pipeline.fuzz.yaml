@@ -7,9 +7,13 @@
 # schedule is a pipeline setting, configured via the REST API / UI, not in this
 # YAML). See .buildkite/README or the workflow-port design doc for the cronline.
 #
-# Azure used the surefire regex includeTests: %regex[.*Fuzz.*class]; the -Dtest
-# selector below is the like-for-like equivalent and matches the ~110 *Fuzz*
-# classes under core plus the compat fuzz tests.
+# Use the surefire regex via the -Dtest.include PROPERTY (the pom wires it into
+# the plugin's <include>), exactly like the griffin/cairo legs and Azure's
+# includeTests: %regex[.*Fuzz.*class]. Do NOT use the -Dtest command-line
+# SELECTOR: it makes surefire treat the pattern as "specified tests", and the
+# benchmarks module (0 tests, ancient surefire 2.17) then fails the whole
+# reactor with "No tests were executed!" - which is exactly what sank fuzz
+# build #1 even though all 685 matched *Fuzz* tests passed.
 steps:
   - label: ":game_die: fuzz"
     key: fuzz
@@ -20,4 +24,4 @@ steps:
     command: |
       source .buildkite/prelude.sh
       echo "--- fuzz test classes (full reactor)"
-      mvn $MVN_COMMON clean test -Dtest='*Fuzz*' -Dout=$PWD/ci/qlog.conf
+      mvn $MVN_COMMON clean test -Dtest.include='%regex[.*Fuzz.*class]' -Dout=$PWD/ci/qlog.conf
