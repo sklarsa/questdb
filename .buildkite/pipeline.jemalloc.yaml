@@ -18,16 +18,22 @@ steps:
       # behaved differently from a local ubuntu:jammy container at every turn, so
       # stop guessing and print ground truth.
       echo "--- fs shape:"; ls -ld /usr/lib /lib 2>&1; ldconfig -p 2>/dev/null | grep -c libjemalloc
-      # Resolve with plain `find /` - no -L, no -xdev. This is EXACTLY the
-      # diagnostic that has listed /usr/lib/x86_64-linux-gnu/libjemalloc.so.2 on
-      # the agent in every run. The two failed variants and WHY:
-      #   - `find -L /` : followed symlinks from / and HUNG for 40+ min.
-      #   - `find / -xdev` : on this agent /usr is a SEPARATE mount from /, so
-      #     -xdev stopped find at the mount boundary before reaching the file -
-      #     which is why the -xdev resolver came back empty while the diagnostic
-      #     `find /` (no -xdev) in the very same step listed the file twice.
-      # Plain `find /` crosses the mount, does not follow symlinks, does not hang.
-      resolve_jem() { find / -name 'libjemalloc.so.2' 2>/dev/null | head -1; }
+      # Resolve libjemalloc. The lib installs at a well-known system location on
+      # this agent (/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 - confirmed by the
+      # diagnostics in builds #2-#8). Check the known paths directly with `test
+      # -e` (instant, no filesystem walk, no glob, no symlink/mount pitfalls),
+      # then fall back to a system-scoped find that PRUNES the build checkout so
+      # `head -1` cannot latch onto the client's bundled bin/.../libjemalloc.so
+      # (note: .so, not .so.2) that lives under the workspace.
+      resolve_jem() {
+        local c
+        for c in /usr/lib/x86_64-linux-gnu/libjemalloc.so.2 \
+                 /usr/lib/aarch64-linux-gnu/libjemalloc.so.2 \
+                 /usr/lib/libjemalloc.so.2 /lib/x86_64-linux-gnu/libjemalloc.so.2; do
+          [ -e "$c" ] && { echo "$c"; return; }
+        done
+        find /usr /lib -name 'libjemalloc.so.2' 2>/dev/null | head -1
+      }
       JEM=$(resolve_jem)
       if [ -z "$JEM" ]; then
         echo "--- installing libjemalloc2"
