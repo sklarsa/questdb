@@ -14,20 +14,21 @@ steps:
       # diagnostics produced no output, so JEM stayed empty. Doing it flat here,
       # with set +e around apt, removes that whole failure class.
       set +e
-      # Resolve with `find`, NOT an `ls` shell glob. The previous attempt used
-      # JEM=$(ls /usr/lib/*/libjemalloc.so.2 ...): the /usr/lib/*/ glob did not
-      # expand under Buildkite's command shell, so `ls` got the literal pattern,
-      # errored, and JEM came back empty - even though the file was present
-      # (the diagnostic `find /` in the same step listed
-      # /usr/lib/x86_64-linux-gnu/libjemalloc.so.2). `find` does its own matching
-      # and is immune to glob-expansion differences.
-      JEM=$(find /usr/lib /lib -name 'libjemalloc.so.2' 2>/dev/null | head -1)
+      # Resolve jemalloc's path. Three prior attempts failed because the lookup
+      # was too narrow for the agent's filesystem: `ls /usr/lib/*/...` (glob did
+      # not expand) and `find /usr/lib /lib -name ...` (the agent's /usr/lib is a
+      # symlink, so `find /usr/lib` without -L does not descend into the real
+      # tree - which is why the diagnostic `find /` DID list
+      # /usr/lib/x86_64-linux-gnu/libjemalloc.so.2 while the resolver came back
+      # empty). Search from / with -L, matching the proven diagnostic command.
+      resolve_jem() { find -L / -name 'libjemalloc.so.2' 2>/dev/null | head -1; }
+      JEM=$(resolve_jem)
       if [ -z "$JEM" ]; then
         echo "--- installing libjemalloc2"
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends libjemalloc2
         sudo ldconfig
-        JEM=$(find /usr/lib /lib -name 'libjemalloc.so.2' 2>/dev/null | head -1)
+        JEM=$(resolve_jem)
       fi
       set -e
       echo "--- jemalloc path: ${JEM:-NONE}"
