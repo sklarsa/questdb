@@ -18,30 +18,24 @@ steps:
       # behaved differently from a local ubuntu:jammy container at every turn, so
       # stop guessing and print ground truth.
       echo "--- fs shape:"; ls -ld /usr/lib /lib 2>&1; ldconfig -p 2>/dev/null | grep -c libjemalloc
-      # Resolve libjemalloc. The lib installs at a well-known system location on
-      # this agent (/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 - confirmed by the
-      # diagnostics in builds #2-#8). Check the known paths directly with `test
-      # -e` (instant, no filesystem walk, no glob, no symlink/mount pitfalls),
-      # then fall back to a system-scoped find that PRUNES the build checkout so
-      # `head -1` cannot latch onto the client's bundled bin/.../libjemalloc.so
-      # (note: .so, not .so.2) that lives under the workspace.
-      resolve_jem() {
-        local c
-        for c in /usr/lib/x86_64-linux-gnu/libjemalloc.so.2 \
-                 /usr/lib/aarch64-linux-gnu/libjemalloc.so.2 \
-                 /usr/lib/libjemalloc.so.2 /lib/x86_64-linux-gnu/libjemalloc.so.2; do
-          [ -e "$c" ] && { echo "$c"; return; }
-        done
-        find /usr /lib -name 'libjemalloc.so.2' 2>/dev/null | head -1
-      }
-      JEM=$(resolve_jem)
-      if [ -z "$JEM" ]; then
-        echo "--- installing libjemalloc2"
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends libjemalloc2
-        sudo ldconfig
-        JEM=$(resolve_jem)
-      fi
+      # Install libjemalloc, then resolve its path WITHOUT any command
+      # substitution. Across builds #2-#9 the pattern was unmistakable: a lookup
+      # inside JEM=$(...) returned empty while the identical lookup running
+      # directly in the step shell (the diagnostics) found the file - even a bare
+      # `test -e /usr/lib/x86_64-linux-gnu/libjemalloc.so.2` failed in the
+      # subshell while dpkg -L/find in the parent listed that exact path. So do
+      # it entirely flat: install unconditionally, then assign JEM by testing the
+      # known paths directly in this shell (no $(), no function, no subshell).
+      echo "--- installing libjemalloc2"
+      sudo apt-get update
+      sudo apt-get install -y --no-install-recommends libjemalloc2
+      sudo ldconfig
+      JEM=""
+      for c in /usr/lib/x86_64-linux-gnu/libjemalloc.so.2 \
+               /usr/lib/aarch64-linux-gnu/libjemalloc.so.2 \
+               /usr/lib/libjemalloc.so.2 /lib/x86_64-linux-gnu/libjemalloc.so.2; do
+        if [ -e "$c" ]; then JEM="$c"; break; fi
+      done
       set -e
       echo "--- jemalloc path: ${JEM:-NONE}"
       if [ -z "$JEM" ]; then
