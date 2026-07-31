@@ -152,6 +152,21 @@ install_client() {
   }
 }
 
+locate_jemalloc() {
+  # Echo the path to libjemalloc.so, installing it if missing. Used only by the
+  # jemalloc coverage leg to LD_PRELOAD the native allocator under instrumentation
+  # (mirrors Azure self-hosted-cover-jobs.yml). All chatter goes to stderr so the
+  # caller can capture a clean path from stdout.
+  local p
+  p=$(ldconfig -p 2>/dev/null | grep -m1 'libjemalloc\.so' | awk '{print $NF}')
+  if [ -z "$p" ] && command -v apt-get >/dev/null 2>&1; then
+    echo "jemalloc not present; installing libjemalloc2" >&2
+    sudo apt-get update >&2 && sudo apt-get install -y --no-install-recommends libjemalloc2 >&2
+    p=$(ldconfig -p 2>/dev/null | grep -m1 'libjemalloc\.so' | awk '{print $NF}')
+  fi
+  echo "$p"
+}
+
 ensure_jdk
 ensure_maven
 ensure_rust

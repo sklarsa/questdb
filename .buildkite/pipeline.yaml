@@ -123,3 +123,25 @@ steps:
       mvn $MVN_COMMON clean test \
         -Dtest.include='**/compat/**,**/cliutil/**' \
         -Dout=$PWD/ci/qlog.conf
+
+  - label: ":pill: coverage (jemalloc LD_PRELOAD)"
+    key: coverage-jemalloc
+    agents:
+      queue: linux-medium
+    plugins:
+      - artifacts#v1.9.4:
+          upload:
+            - "core/target/site/jacoco"
+          compressed: jacoco-jemalloc.tgz
+    command: |
+      source .buildkite/prelude.sh
+      JEM=$(locate_jemalloc)
+      echo "--- jemalloc path: ${JEM:-NONE}"
+      test -n "$JEM" || { echo "libjemalloc not found"; exit 1; }
+      echo "--- pre-build core so coverage run has deps"
+      mvn $MVN_COMMON -pl core -am -DskipTests install
+      echo "--- instrumented std slice under jemalloc LD_PRELOAD"
+      LD_PRELOAD="$JEM" mvn $MVN_COMMON -f core/pom.xml test \
+        -P jacoco,qdbr-coverage -Dtest.include='**/std/**'
+      echo "--- jacoco report"
+      mvn $MVN_COMMON -f core/pom.xml jacoco:report || true

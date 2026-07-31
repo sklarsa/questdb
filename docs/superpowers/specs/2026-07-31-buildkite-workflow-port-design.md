@@ -125,7 +125,7 @@ what Azure did, the Buildkite mapping, what fought back + the fix, score.
 | Chunk | Azure mechanism | Buildkite mapping | Friction (what fought back) | Score |
 |-------|-----------------|-------------------|-----------------------------|-------|
 | (smoke) | Reposilite cache, apt mirror, self-hosted pools | Central + in-step JDK; hosted queues | bytecode-check glob eaten by command wrapper; UTF-8 locale unset on plain agents; JaCoCo file-count > 5000 artifact cap | 2 |
-| 1 | | | | |
+| 1 | aux-job javadoc goal + compat-steps compat/cliutil test run (Maven tasks) | Two additive inline steps on linux-medium; compat uploads surefire XML | None. Both went green first try (build #25). Verified real work: compat ran 66 compat + 24 cliutil tests (0 fail); core javadoc actually generated (`No previous run data found, generating javadoc` + real per-file warnings). `-P javadoc`/`-P qdbr-release` live in core/pom.xml but activate fine from a root `mvn`; other modules correctly skip. | 1 |
 | 2 | | | | |
 | 3 | | | | |
 | 4 | | | | |
