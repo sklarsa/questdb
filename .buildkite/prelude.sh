@@ -152,48 +152,6 @@ install_client() {
   }
 }
 
-locate_jemalloc() {
-  # Echo the path to libjemalloc on stdout, installing it if missing. Used only
-  # by the jemalloc coverage leg to LD_PRELOAD the native allocator under
-  # instrumentation (mirrors Azure self-hosted-cover-jobs.yml). All chatter goes
-  # to stderr so the caller captures a clean path from stdout.
-  #
-  # The whole body runs under `set +e` in a subshell. Builds #26/#27/#28 all
-  # failed here NOT because libjemalloc was absent - apt installed it every time
-  # ("Setting up libjemalloc2") - but because this resolver ran inside a command
-  # substitution under the prelude's `set -euo pipefail`. A benign non-zero exit
-  # (an empty `grep`, a `head` closing a pipe early -> SIGPIPE on `find`) aborted
-  # the function mid-way, so the post-install lookup never ran and the diagnostic
-  # branch never printed. Dropping `set -e` for this body removes that whole
-  # class of abort; the resolution logic itself was always correct.
-  (
-    set +e
-    _resolve() {
-      local q
-      q=$(ldconfig -p 2>/dev/null | grep -m1 'libjemalloc\.so' | awk '{print $NF}')
-      if [ -n "$q" ] && [ -e "$q" ]; then printf '%s' "$q"; return; fi
-      # The libjemalloc2 package installs to /usr/lib/<arch-triplet>/; search the
-      # common lib roots wholesale rather than assume the triplet.
-      find /usr/lib /lib /usr/local/lib -name 'libjemalloc.so*' 2>/dev/null | sort | head -1
-    }
-    p=$(_resolve)
-    if [ -z "$p" ] && command -v apt-get >/dev/null 2>&1; then
-      echo "jemalloc not present; installing libjemalloc2" >&2
-      sudo apt-get update >&2
-      sudo apt-get install -y --no-install-recommends libjemalloc2 >&2
-      sudo ldconfig >&2 2>&1
-      p=$(_resolve)
-    fi
-    if [ -z "$p" ]; then
-      echo "locate_jemalloc: empty after install; diagnostics follow" >&2
-      echo "  dpkg -L libjemalloc2:" >&2; dpkg -L libjemalloc2 2>&1 | grep -i jemalloc >&2
-      echo "  find / -name libjemalloc*:" >&2; find / -name 'libjemalloc*' 2>/dev/null >&2
-      echo "  ldconfig -p | grep jemalloc:" >&2; ldconfig -p 2>/dev/null | grep -i jemalloc >&2
-    fi
-    printf '%s' "$p"
-  )
-}
-
 ensure_jdk
 ensure_maven
 ensure_rust
