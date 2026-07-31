@@ -155,6 +155,16 @@ steps:
       echo "--- build rhel image (native arch, no push)"
       docker build -f core/Dockerfile --target rhel -t questdb-ci:local-rhel .
 
+  - label: ":apple: test: griffin (macos)"
+    key: test-griffin-macos
+    agents:
+      queue: macos-large
+    artifact_paths:
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      source .buildkite/macos-prelude.sh
+      mvn $MVN_COMMON clean test -Dtest.include='**/griffin/**'
+
   # NOTE: the jemalloc LD_PRELOAD coverage leg (Azure self-hosted-cover-jobs.yml)
   # is deliberately NOT included yet - see docs/superpowers/specs/
   # 2026-07-31-buildkite-workflow-port-design.md, chunk 2. On these hosted
