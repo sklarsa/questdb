@@ -154,33 +154,42 @@ install_client() {
 
 _find_jemalloc_path() {
   # Resolve libjemalloc's path without trusting the ldconfig cache. The Ubuntu
-  # libjemalloc2 package ships the versioned /usr/lib/.../libjemalloc.so.2 and
-  # runs `ldconfig` in a libc-bin trigger, but the refreshed cache is not always
-  # visible to a follow-up `ldconfig -p` in the same step (this is exactly what
-  # made the jemalloc leg fail on build #26: apt installed the package, yet
-  # `ldconfig -p | grep libjemalloc` still came back empty). Query the cache
-  # first (fast when present) then fall back to a filesystem search, which is
-  # deterministic and immune to the cache-timing race.
-  local p
-  p=$(ldconfig -p 2>/dev/null | grep -m1 'libjemalloc\.so' | awk '{print $NF}')
-  if [ -z "$p" ] || [ ! -e "$p" ]; then
-    p=$(find /usr/lib /lib -name 'libjemalloc.so*' 2>/dev/null | sort | head -1)
-  fi
+  # libjemalloc2 package ships the versioned /usr/lib/<triplet>/libjemalloc.so.2
+  # and runs `ldconfig` in a libc-bin trigger, but the refreshed cache is not
+  # always visible to a follow-up `ldconfig -p` in the same step (builds #26/#27
+  # both failed here: apt installed the package, yet the in-step lookup returned
+  # empty). Query the cache first, then fall back to a broad filesystem search.
+  # `|| true` on every stage so a SIGPIPE/no-match under `set -euo pipefail`
+  # cannot abort the enclosing command substitution.
+  local p=""
+  p=$(ldconfig -p 2>/dev/null | grep -m1 'libjemalloc\.so' | awk '{print $NF}' || true)
+  if [ -n "$p" ] && [ -e "$p" ]; then echo "$p"; return; fi
+  # Broad search: the package lands under /usr/lib/<arch-triplet>/, but do not
+  # assume the triplet - search the common lib roots wholesale.
+  p=$(find /usr/lib /lib /usr/local/lib -name 'libjemalloc.so*' 2>/dev/null | sort | head -1 || true)
   echo "$p"
 }
 
 locate_jemalloc() {
-  # Echo the path to libjemalloc, installing it if missing. Used only by the
-  # jemalloc coverage leg to LD_PRELOAD the native allocator under instrumentation
-  # (mirrors Azure self-hosted-cover-jobs.yml). All chatter goes to stderr so the
-  # caller can capture a clean path from stdout.
-  local p
+  # Echo the path to libjemalloc on stdout, installing it if missing. Used only
+  # by the jemalloc coverage leg to LD_PRELOAD the native allocator under
+  # instrumentation (mirrors Azure self-hosted-cover-jobs.yml). All chatter goes
+  # to stderr so the caller captures a clean path from stdout.
+  local p=""
   p=$(_find_jemalloc_path)
   if [ -z "$p" ] && command -v apt-get >/dev/null 2>&1; then
     echo "jemalloc not present; installing libjemalloc2" >&2
     sudo apt-get update >&2 && sudo apt-get install -y --no-install-recommends libjemalloc2 >&2
     sudo ldconfig >&2 2>&1 || true
     p=$(_find_jemalloc_path)
+  fi
+  if [ -z "$p" ]; then
+    # Diagnostics for the next failure: show what actually landed on disk so we
+    # stop guessing. (Only printed when resolution failed, all to stderr.)
+    echo "locate_jemalloc: still empty after install; diagnostics follow" >&2
+    echo "  dpkg -L libjemalloc2:" >&2; dpkg -L libjemalloc2 2>&1 | grep -i jemalloc >&2 || true
+    echo "  find / -name libjemalloc*:" >&2; find / -name 'libjemalloc*' 2>/dev/null >&2 || true
+    echo "  ldconfig -p | grep jemalloc:" >&2; ldconfig -p 2>/dev/null | grep -i jemalloc >&2 || true
   fi
   echo "$p"
 }
