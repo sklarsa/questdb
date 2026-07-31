@@ -101,10 +101,20 @@ def class_to_include(fqn):
     return f"**/{simple}.java"
 
 
+# Classes the static pipeline deliberately excludes and the generator must too.
+# ServerMainTest.testServerUpgradeDoesNotOverrideWebConsoleConfig needs the
+# bundled web console (-P build-web-console), which these test legs do not build;
+# it errors otherwise. The static 'other' leg excludes it for exactly this reason
+# (see the 2026-07-29 smoke-test design). Without this the generator would place
+# ServerMainTest in a shard and that shard would fail on 1 of 10004 tests.
+EXCLUDED_CLASSES = {"io.questdb.test.ServerMainTest"}
+
+
 def _discover_test_classes():
     """Enumerate test-class FQNs from the source tree (fallback when no timings).
 
-    Walks core/src/test for *Test.java and derives the FQN from the path.
+    Walks core/src/test for *Test.java and derives the FQN from the path, minus
+    the web-console-dependent classes the static pipeline also excludes.
     """
     classes = []
     root = os.path.join("core", "src", "test", "java")
@@ -113,7 +123,8 @@ def _discover_test_classes():
             if f.endswith("Test.java"):
                 rel = os.path.relpath(os.path.join(dirpath, f), root)
                 fqn = rel[:-len(".java")].replace(os.sep, ".")
-                classes.append(fqn)
+                if fqn not in EXCLUDED_CLASSES:
+                    classes.append(fqn)
     return classes
 
 

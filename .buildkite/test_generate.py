@@ -97,6 +97,11 @@ class TestRenderAndMain(unittest.TestCase):
         g = generate.class_to_include("io.questdb.test.griffin.AddIndexTest")
         self.assertIn("AddIndexTest", g)
 
+    def test_servermain_is_excluded(self):
+        # ServerMainTest needs the web console the test legs do not build; the
+        # generator must exclude it exactly as the static 'other' leg does.
+        self.assertIn("io.questdb.test.ServerMainTest", generate.EXCLUDED_CLASSES)
+
 
 if __name__ == "__main__":
     unittest.main()
