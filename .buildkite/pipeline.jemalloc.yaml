@@ -14,21 +14,29 @@ steps:
       # diagnostics produced no output, so JEM stayed empty. Doing it flat here,
       # with set +e around apt, removes that whole failure class.
       set +e
-      # Resolve jemalloc's path. Three prior attempts failed because the lookup
-      # was too narrow for the agent's filesystem: `ls /usr/lib/*/...` (glob did
-      # not expand) and `find /usr/lib /lib -name ...` (the agent's /usr/lib is a
-      # symlink, so `find /usr/lib` without -L does not descend into the real
-      # tree - which is why the diagnostic `find /` DID list
-      # /usr/lib/x86_64-linux-gnu/libjemalloc.so.2 while the resolver came back
-      # empty). Search from / with -L, matching the proven diagnostic command.
-      resolve_jem() { find -L / -name 'libjemalloc.so.2' 2>/dev/null | head -1; }
-      JEM=$(resolve_jem)
+      # Resolve jemalloc's path via the linker cache first, then a BOUNDED find.
+      # History of what did NOT work here:
+      #   - `ls /usr/lib/*/libjemalloc.so.2` : the glob did not expand in the
+      #     inline command shell, so ls got the literal pattern and returned empty.
+      #   - `find /usr/lib /lib -name ...` (no -L) : returned empty on the agent
+      #     (its /usr/lib layout hid the file from a symlink-naive descent).
+      #   - `find -L / -name ...` : DID cross the symlink, but following symlinks
+      #     from / crawled the whole tree / looped and HUNG the leg for 40+ min.
+      # `ldconfig -p` reads the linker cache directly - instant, authoritative,
+      # symlink-proof. Keep a bounded (maxdepth, no -L) find as a fallback.
+      resolve_jem() {
+        ldconfig -p 2>/dev/null | awk -F'=> ' '/libjemalloc\.so\.2/{print $2; exit}'
+      }
+      resolve_jem_fallback() {
+        find /usr/lib /lib -maxdepth 3 -name 'libjemalloc.so.2' 2>/dev/null | head -1
+      }
+      JEM=$(resolve_jem); [ -n "$JEM" ] || JEM=$(resolve_jem_fallback)
       if [ -z "$JEM" ]; then
         echo "--- installing libjemalloc2"
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends libjemalloc2
         sudo ldconfig
-        JEM=$(resolve_jem)
+        JEM=$(resolve_jem); [ -n "$JEM" ] || JEM=$(resolve_jem_fallback)
       fi
       set -e
       echo "--- jemalloc path: ${JEM:-NONE}"
