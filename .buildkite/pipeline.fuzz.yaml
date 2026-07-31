@@ -24,4 +24,4 @@ steps:
     command: |
       source .buildkite/prelude.sh
       echo "--- fuzz test classes (full reactor)"
-      mvn $MVN_COMMON clean test -Dtest.include='%regex[.*Fuzz.*class]' -Dout=$PWD/ci/qlog.conf
+      mvn $MVN_COMMON clean test -Dtest.include='%regex[.*Fuzz.*class]' -Dout=$(pwd)/ci/qlog.conf

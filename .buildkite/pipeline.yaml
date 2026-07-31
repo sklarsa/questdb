@@ -107,7 +107,7 @@ steps:
       queue: linux-medium
     command: |
       source .buildkite/prelude.sh
-      IDEA_ROOT="$PWD/.ci/intellij"
+      IDEA_ROOT="$(pwd)/.ci/intellij"
       rm -rf "$IDEA_ROOT"; mkdir -p "$IDEA_ROOT"
       echo "--- download pinned IntelliJ (2GB; hosted agents have no persistent tool cache)"
       wget -q "https://download.jetbrains.com/idea/idea-2026.1.4.tar.gz" -O intellij.tar.gz
@@ -142,7 +142,7 @@ steps:
       echo "--- compat + cliutil tests"
       mvn $MVN_COMMON clean test \
         -Dtest.include='**/compat/**,**/cliutil/**' \
-        -Dout=$PWD/ci/qlog.conf
+        -Dout=$(pwd)/ci/qlog.conf
 
   - label: ":pill: coverage (jemalloc LD_PRELOAD)"
     key: coverage-jemalloc
