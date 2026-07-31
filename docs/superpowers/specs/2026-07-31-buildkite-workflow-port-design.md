@@ -128,7 +128,7 @@ what Azure did, the Buildkite mapping, what fought back + the fix, score.
 | 1 | aux-job javadoc goal + compat-steps compat/cliutil test run (Maven tasks) | Two additive inline steps on linux-medium; compat uploads surefire XML | None. Both went green first try (build #25). Verified real work: compat ran 66 compat + 24 cliutil tests (0 fail); core javadoc actually generated (`No previous run data found, generating javadoc` + real per-file warnings). `-P javadoc`/`-P qdbr-release` live in core/pom.xml but activate fine from a root `mvn`; other modules correctly skip. | 1 |
 | 2 | | | | |
 | 3 | | | | |
-| 4 | | | | |
+| 4 | test-fuzz.yml: `schedules: cron */15` on master, `%regex[.*Fuzz.*class]`, full reactor | Separate `questdb-fuzz` pipeline (inline config uploads pipeline.fuzz.yaml) + a REST-created hourly schedule; triggers off | Two real snags. (a) Buildkite schedules are NOT in-YAML like Azure `schedules:` - they are a pipeline-level object created via REST/UI, and need a whole second pipeline for isolation. (b) `-Dtest='*Fuzz*'` (the command-line SELECTOR) made the empty `benchmarks` module (surefire 2.17) abort the reactor with "No tests were executed!" even though all 72 fuzz classes passed - had to switch to the `-Dtest.include` PROPERTY like the other legs. Cadence reduced */15 -> hourly for the eval. | 3 |
 | 5 | | | | |
 | 6 | | | | |
 | 7 | | | | |
