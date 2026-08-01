@@ -183,16 +183,14 @@ steps:
     artifact_paths:
       - "compat/target/surefire-reports/**/*.xml"
       - "core/target/surefire-reports/**/*.xml"
-    plugins:
-      # Persist the Maven local repo across builds. compat pulls the heaviest
-      # deps (hadoop/parquet/influxdb) - ~589 "Downloading from central" on a
-      # cold run. Key on the root pom checksum so a dependency change rebuilds
-      # the cache once; restore falls back to the newest m2-* cache otherwise.
-      - cache#v1.7.0:
-          manifest: pom.xml
-          path: ~/.m2/repository
-          restore: file
-          save: file
+    # Native Buildkite hosted cache for the Maven local repo. compat pulls the
+    # heaviest deps (hadoop/parquet/influxdb) - ~589 "Downloading from central"
+    # cold. NOT the community cache plugin: that uses /var/cache/buildkite which
+    # does not exist on ephemeral hosted agents (its save hook fails the build).
+    cache:
+      paths:
+        - "~/.m2/repository"
+      name: "maven"
     command: |
       PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
       echo "--- compat + cliutil tests"
