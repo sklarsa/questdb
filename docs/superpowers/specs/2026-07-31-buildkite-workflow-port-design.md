@@ -220,3 +220,26 @@ non-deterministic setUp flake, unrelated to the prelude change).
 
 Remaining redownload lever (not yet done): Maven `.m2` is re-resolved from
 Central on every leg - Buildkite Cached Storage could persist ~/.m2.
+
+### Maven .m2 caching (native hosted cache)
+
+After the image pin + opt-in prelude, the last redownload was Maven: every leg
+cold-resolved deps from Central (compat: 589 "Downloading from central" events
+per run). First attempt used the community `cache-buildkite-plugin` - WRONG for
+hosted agents: it caches to a local `/var/cache/buildkite` folder that does not
+exist on ephemeral hosted agents, so its post-command save hook failed the build
+even though the tests passed. The right mechanism is Buildkite's native
+step-level `cache:` key (paths: ~/.m2/repository), which uses the hosted volume
+cache (`hosted_container_cache_enabled=True`). Measured cold vs warm on compat:
+589 -> 0 Central downloads (100%), 2.9 -> 2.4 min. The time win is modest because
+deps download fast in parallel; the real value is RELIABILITY - zero per-build
+dependency on Maven Central, which directly removes the flaky-Central-pull class
+that plagued the Azure/Reposilite setup (Steven's #1 documented CI pain). Rolled
+out to lint/griffin/cairo/other/compat/coverage/javadoc.
+
+### Net optimization result
+Baseline (plain agent, full prelude, no cache) -> optimized (pinned custom image
++ opt-in Rust/client + native m2 cache): ~22-28% faster per leg from the image +
+prelude alone, plus elimination of all per-build Maven Central downloads. The
+custom-image pin (a UI-only action - the API is feature-gated) was the master
+unblock; everything else compounds on it.
