@@ -195,3 +195,28 @@ plain-agent tax.
 - [ ] Re-enable the jemalloc coverage leg on the custom image (or bake libjemalloc in).
 - [ ] Run coverage shards on `linux-large`; consider splitting the heaviest.
 - [ ] Re-add the deferred cover-checker diff-coverage GitHub posting, the enterprise REST trigger, Windows, and arm64/zfs/graal Linux variants.
+
+
+## Post-eval optimization (custom image pinned + opt-in prelude)
+
+After the breadth-first port, the custom agent image `linux-x86-test` was
+attached to the linux queues via the Cluster UI (Queues -> queue -> Base image
+-> Agent image dropdown). The REST/GraphQL API cannot set `agent_image_ref`
+(feature-gated), but the console UI can - so this is a UI-only action. Build #34
+confirmed it active (`Using JAVA_HOME=/opt/jdk`, no Temurin download).
+
+With tools baked in, two per-leg costs were then made OPT-IN (default off), set on
+the same line as `source` to avoid the empty-cross-line-var gotcha:
+- `PRELUDE_NEED_RUST` - only the lint leg compiles Rust; ensure_rust dropped from
+  10 legs to 1.
+- `PRELUDE_NEED_CLIENT` - the -SNAPSHOT client build (submodule + CMake native +
+  mvn install) runs only on legs that load client classes; format skips it.
+
+Measured (plain-agent baseline #25 -> baked+opt-in #36, identical legs):
+compat 3.2->2.3min (-28%), coverage 4.6->3.6min (-22%). Heavier legs benefit
+more; the coverage matrix's ~50min timeouts are now well clear. Build #36 went
+fully green (one test:other ServerMain-boot flake passed on retry - a known
+non-deterministic setUp flake, unrelated to the prelude change).
+
+Remaining redownload lever (not yet done): Maven `.m2` is re-resolved from
+Central on every leg - Buildkite Cached Storage could persist ~/.m2.
