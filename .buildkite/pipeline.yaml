@@ -7,6 +7,10 @@ steps:
     key: lint
     agents:
       queue: linux-small
+    cache:
+      paths:
+        - "~/.m2/repository"
+      name: "maven"
     command: |
       # Notes on this agent's shell, learned the hard way while getting the
       # bytecode check green (see the check itself below):
@@ -41,6 +45,10 @@ steps:
     key: test-griffin
     agents:
       queue: linux-large
+    cache:
+      paths:
+        - "~/.m2/repository"
+      name: "maven"
     artifact_paths:
       - "core/target/surefire-reports/**/*.xml"
     command: |
@@ -51,6 +59,10 @@ steps:
     key: test-cairo
     agents:
       queue: linux-large
+    cache:
+      paths:
+        - "~/.m2/repository"
+      name: "maven"
     artifact_paths:
       - "core/target/surefire-reports/**/*.xml"
     command: |
@@ -61,6 +73,10 @@ steps:
     key: test-other
     agents:
       queue: linux-medium
+    cache:
+      paths:
+        - "~/.m2/repository"
+      name: "maven"
     artifact_paths:
       - "core/target/surefire-reports/**/*.xml"
     command: |
@@ -72,6 +88,10 @@ steps:
     key: coverage
     agents:
       queue: linux-medium
+    cache:
+      paths:
+        - "~/.m2/repository"
+      name: "maven"
     # The JaCoCo HTML report emits one file per class - thousands of small
     # files, well over Buildkite's hard limit of 5000 artifacts per job.
     # Compress the whole report tree into a single archive before upload so
@@ -130,6 +150,10 @@ steps:
     key: javadoc
     agents:
       queue: linux-medium
+    cache:
+      paths:
+        - "~/.m2/repository"
+      name: "maven"
     command: |
       PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
       echo "--- javadoc"
