@@ -29,7 +29,7 @@ steps:
         artifact_paths:
           - "core/target/jacoco-{{matrix}}.exec"
         command: |
-          source .buildkite/prelude.sh
+          PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
           echo "--- pre-build core so the instrumented run has deps"
           mvn $MVN_COMMON -pl core -am -DskipTests install
           # Per-shard include/exclude, copied verbatim from Azure
@@ -66,7 +66,7 @@ steps:
       - artifacts#v1.9.4:
           download: "core/target/jacoco-*.exec"
     command: |
-      source .buildkite/prelude.sh
+      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
       echo "--- downloaded per-shard exec files:"
       ls -la core/target/jacoco-*.exec || { echo "no exec files downloaded"; exit 1; }
       echo "--- build core classes so the report step has ../core/target/classes"

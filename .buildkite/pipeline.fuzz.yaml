@@ -22,6 +22,6 @@ steps:
     artifact_paths:
       - "core/target/surefire-reports/**/*.xml"
     command: |
-      source .buildkite/prelude.sh
+      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
       echo "--- fuzz test classes (full reactor)"
       mvn $MVN_COMMON clean test -Dtest.include='%regex[.*Fuzz.*class]' -Dout=$(pwd)/ci/qlog.conf

@@ -154,7 +154,6 @@ install_client() {
 
 ensure_jdk
 ensure_maven
-ensure_rust
 
 export PATH="$JAVA_HOME/bin:$PATH"
 echo "Using JAVA_HOME=$JAVA_HOME"
@@ -164,9 +163,23 @@ echo "Locale: LANG=$LANG LC_ALL=$LC_ALL"
 java -XshowSettings:properties -version 2>&1 | grep -iE "sun.jnu.encoding|file.encoding" || true
 java -version
 mvn -version
-cargo --version || true
 
-install_client
+# Rust setup is OPT-IN: only the lint leg compiles Rust. Every other leg (griffin,
+# cairo, other, compat, javadoc, docker, coverage) skips it, saving the rustup
+# toolchain/component churn per leg. Set PRELUDE_NEED_RUST=1 before sourcing to
+# enable. On the custom image the toolchain is already baked, so ensure_rust is
+# fast even when it does run.
+if [ "${PRELUDE_NEED_RUST:-0}" = "1" ]; then
+  ensure_rust
+  cargo --version || true
+fi
+
+# Building/installing the -SNAPSHOT client (submodule + native lib + mvn install)
+# is only needed by legs that load client classes (the test + coverage legs).
+# javadoc and docker do not, so it is OPT-IN too: set PRELUDE_NEED_CLIENT=1.
+if [ "${PRELUDE_NEED_CLIENT:-0}" = "1" ]; then
+  install_client
+fi
 
 # Common Maven flags shared by every leg. Central-only, batch, local-client.
 export MVN_COMMON="--batch-mode -P local-client -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false"

@@ -151,7 +151,7 @@ def render_pipeline(shards):
             "    artifact_paths:",
             '      - "core/target/surefire-reports/**/*.xml"',
             "    command: |",
-            "      source .buildkite/prelude.sh",
+            "      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh",
             f"      mvn $MVN_COMMON clean test -Dtest.include='{includes}'",
         ]
     return "\n".join(lines) + "\n"

@@ -16,7 +16,7 @@ steps:
       #    though a plain glob listed the JARs, so the check uses a glob, not
       #    find;
       #  - $MVN_COMMON survives across lines only because prelude.sh exports it.
-      source .buildkite/prelude.sh
+      PRELUDE_NEED_RUST=1 PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
       echo "--- unterminated log check"
       python3 find_unterminated_logs.py core/src --exclude=LogParanoiaTest.java
       echo "--- rust fmt + clippy"
@@ -44,7 +44,7 @@ steps:
     artifact_paths:
       - "core/target/surefire-reports/**/*.xml"
     command: |
-      source .buildkite/prelude.sh
+      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
       mvn $MVN_COMMON clean test -Dtest.include='**/griffin/**'
 
   - label: ":coffee: test: cairo"
@@ -54,7 +54,7 @@ steps:
     artifact_paths:
       - "core/target/surefire-reports/**/*.xml"
     command: |
-      source .buildkite/prelude.sh
+      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
       mvn $MVN_COMMON clean test -Dtest.include='**/cairo/**'
 
   - label: ":coffee: test: other"
@@ -64,7 +64,7 @@ steps:
     artifact_paths:
       - "core/target/surefire-reports/**/*.xml"
     command: |
-      source .buildkite/prelude.sh
+      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
       mvn $MVN_COMMON clean test \
         -Dtest.exclude='**/griffin/**,**/cairo/**,**/compat/**,**/cliutil/**,**/ServerMainTest.java'
 
@@ -91,7 +91,7 @@ steps:
             - "core/target/jacoco.exec"
           compressed: jacoco-report.tgz
     command: |
-      source .buildkite/prelude.sh
+      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
       echo "--- pre-build core so coverage run has deps"
       mvn $MVN_COMMON -pl core -am -DskipTests install
       echo "--- instrumented test slice (std package) with jacoco"
@@ -131,7 +131,7 @@ steps:
     agents:
       queue: linux-medium
     command: |
-      source .buildkite/prelude.sh
+      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
       echo "--- javadoc"
       mvn $MVN_COMMON compile javadoc:javadoc -DskipTests -P javadoc -P qdbr-release
 
@@ -184,7 +184,7 @@ steps:
       - "compat/target/surefire-reports/**/*.xml"
       - "core/target/surefire-reports/**/*.xml"
     command: |
-      source .buildkite/prelude.sh
+      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
       echo "--- compat + cliutil tests"
       mvn $MVN_COMMON clean test \
         -Dtest.include='**/compat/**,**/cliutil/**' \
