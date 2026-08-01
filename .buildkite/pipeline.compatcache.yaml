@@ -1,0 +1,17 @@
+steps:
+  - label: ":handshake: compat (cache pilot)"
+    key: compat-cache
+    agents:
+      queue: linux-medium
+    plugins:
+      - cache#v1.7.0:
+          manifest: pom.xml
+          path: ~/.m2/repository
+          restore: file
+          save: file
+    command: |
+      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
+      echo "--- m2 dir size before/after (cache signal) ---"
+      du -sh ~/.m2/repository 2>/dev/null || echo "m2 empty (cold)"
+      echo "--- compat + cliutil tests"
+      mvn $MVN_COMMON clean test -Dtest.include='**/compat/**,**/cliutil/**' -Dout=$(pwd)/ci/qlog.conf
