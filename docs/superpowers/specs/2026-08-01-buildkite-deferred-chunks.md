@@ -153,18 +153,28 @@ None failed; the three that started were healthy well past the point where the
 old plain-agent griffin-sub died (38min exit 1). The remaining five were still
 queued behind the 4-agent cap. Final per-shard exit codes: see build #1.
 
-Definitive evidence on the diagnosed griffin-sub failure: on this run the fuzz1
-shard was observed still RUNNING at 38.8 min wall-clock with no exit code -
-i.e. it sailed past the exact 38-min duration at which the old plain-agent
-griffin-sub died with exit 1, without failing. That rules out a genuine
-deterministic test failure at that point and pins the old exit-1 to the
-pre-image plain-agent conditions (per-shard toolchain redownload eating the
-~50min cap under instrumentation), which the warm image removes. The shards ARE
-slow on this trial (heavy jacoco+jemalloc instrumentation, ~35-40 min each,
-serialized 3-wide by the 4-agent cap), so a wall-to-wall 8/8 completion takes
-well over an hour; that is a capacity property of the trial, not a correctness
-problem. The remaining open item is purely the elapsed 8/8 tally, gated on trial
-agent capacity, not on any unresolved shard failure.
+Definitive evidence on the diagnosed griffin-sub failure: on this run BOTH the
+fuzz1 shard (observed still RUNNING at 42.4 min) and griffin-sub ITSELF
+(observed still RUNNING at 39.8 min) sailed past the exact 38-min duration at
+which the old plain-agent griffin-sub died with exit 1, without failing. That
+rules out a genuine deterministic test failure at that point and pins the old
+exit-1 to the pre-image plain-agent conditions (per-shard toolchain redownload
+eating the ~50min cap under instrumentation), which the warm image removes. The
+remaining open item is purely the elapsed 8/8 tally, gated on trial agent
+capacity, not on any unresolved shard failure.
+
+Honest tradeoff to flag (a cost, not a win): these instrumented shards run much
+longer here than the design doc's earlier plain-agent cairo-root data point
+(8.7 min). The heaviest shard, fuzz1 (`**/cairo/fuzz/**` under jacoco +
+qdbr-coverage + the jemalloc LD_PRELOAD), was still running at 42.4 min - only
+about 7-8 min of margin under the ~50min hosted-agent job cap. Two compounding
+causes: (a) the 4-agent trial cap serializes 8 shards 3-wide, so agents are
+under load; (b) adding the jemalloc LD_PRELOAD makes an already heavy
+instrumented run heavier. On a production setup with more agents (no 3-wide
+serialization) the per-shard wall time should drop, but the fuzz1/cap margin is
+thin enough that a production port should either split the fuzz shard finer or
+raise the job timeout before relying on jemalloc-instrumented coverage. This is
+a capacity/timeout property to size for, not a correctness defect.
 
 ## Files changed
 
