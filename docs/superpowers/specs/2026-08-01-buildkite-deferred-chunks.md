@@ -99,82 +99,91 @@ committed-`.so` path is what makes the leg green on the CURRENT image today.
     the jacoco.exec that matters is written by the instrumented test run, not by
     this report call. Pre-existing behavior, not introduced here.
 
-## Chunk 7 - 8-way coverage matrix: live run, no failures, healthy under cap
+## Chunk 7 - 8-way coverage matrix: real bug found + fixed (empty shard filter)
 
 Re-ran the full 8-way matrix (griffin-root/sub, fuzz1/2, cairo-root/sub, pgwire,
 other; Azure `self-hosted-cover-jobs.yml` include/exclude verbatim) on
-`linux-large`, now under the jemalloc LD_PRELOAD (same inline-prefix pattern),
-on the warm image, in throwaway pipeline `questdb-cov-matrix-deferred` build #1.
+`linux-large` under the jemalloc LD_PRELOAD, on the warm image, in throwaway
+pipeline `questdb-cov-matrix-deferred` build #1.
 
-Key finding on the previously-undiagnosed griffin-sub failure: the design doc's
-chunk-7 row noted griffin-sub "still failed at 38min with exit 1 for an
-undiagnosed reason (Buildkite's log API returned a persistent 500)". On THIS run,
-on the warm image, griffin-sub ran clean past that mark WITHOUT the exit-1 - no
-shard reproduced the failure. The prior exit-1 correlates with the pre-image
-plain-agent run (toolchain re-download per shard eating into the ~50min cap under
-instrumentation); on the warm image every shard starts with the toolchain baked,
-which removed that pressure.
+griffin-sub FAILED again with exit 1 at 40.3 min - the same signature the design
+doc flagged as undiagnosed. This time it was diagnosed to root cause (do NOT
+mislabel it flaky - the proof is below).
 
-What was observed live (times are wall-clock on the shard, 3-wide due to the
-4-agent trial cap):
-- All 8 shards launched and ran on `linux-large` under the jemalloc LD_PRELOAD.
-- No shard failed. Every terminal shard passed; the rest were still running,
-  none over the ~50min hosted-agent cap. The instrumented fuzz1/griffin-sub
-  shards are heavy (~30min+ each under jacoco+jemalloc with many randomized
-  iterations) but stayed comfortably under the cap.
-- The merge step (`ci/jacoco-merge.xml verify -DincludeRoot=core/target`)
-  depends_on the whole matrix and downloads every `jacoco-*.exec`; it runs after
-  the shards.
+### Retrieving the log past the persistent 500
 
-Caveat on completeness: at the moment this note was committed the full 8/8 tally
-was still finishing (the matrix runs > 1 hour end-to-end at the 4-agent trial cap
-with ~30min instrumented shards). The load-bearing results - jemalloc actually
-preloads and fails-closed if it does not, the matrix is structurally correct,
-runs on linux-large under the warm image, and griffin-sub no longer reproduces
-its exit-1 - are all established. See the pipeline's build #1 for the final
-per-shard exit codes.
+The Buildkite log JSON endpoint returned a persistent HTTP 500 for the failed
+job (`{"message":"Internal Server Error"}`), exactly as the design doc reported.
+The cause is now known: the job's log was 721 MB, too large for the JSON
+serializer. Fetching the SAME endpoint with `Accept: text/plain` (or the
+`/log.txt` path) streamed the full 721 MB successfully. So the "500" is not
+data-loss - it is a size limit on the JSON log route, and the txt route is the
+workaround.
 
-Per-shard states at commit time (from the Buildkite REST API, build #1 still
-running; 3-wide because the trial caps at 4 hosted agents):
+### Root cause: the per-shard include/exclude filter was EMPTY
 
-| shard        | state     | elapsed | exit |
-|--------------|-----------|---------|------|
-| griffin-root | scheduled |         |      |
-| griffin-sub  | running   | ~29m    |      |
-| fuzz1        | running   | ~31m    |      |
-| fuzz2        | scheduled |         |      |
-| cairo-root   | scheduled |         |      |
-| cairo-sub    | scheduled |         |      |
-| pgwire       | running   | ~23m    |      |
-| other        | running   | ~23m    |      |
-| merge        | waiting   |         |      |
+The 721 MB log ended with a Maven `MojoFailureException` and this reactor
+summary: `Tests run: 37934, Failures: 0, Errors: 1, Skipped: 447`. 37,934 test
+methods is essentially the ENTIRE suite - griffin-sub was supposed to run only
+the ~774 griffin subpackage classes. The shard log confirmed why:
 
-None failed; the three that started were healthy well past the point where the
-old plain-agent griffin-sub died (38min exit 1). The remaining five were still
-queued behind the 4-agent cap. Final per-shard exit codes: see build #1.
+    --- coverage shard griffin-sub: include=[] exclude=[]
+    mvn ... -P jacoco,qdbr-coverage -Dtest.include="" -Dtest.exclude=""
 
-Definitive evidence on the diagnosed griffin-sub failure: on this run BOTH the
-fuzz1 shard (observed still RUNNING at 42.4 min) and griffin-sub ITSELF
-(observed still RUNNING at 39.8 min) sailed past the exact 38-min duration at
-which the old plain-agent griffin-sub died with exit 1, without failing. That
-rules out a genuine deterministic test failure at that point and pins the old
-exit-1 to the pre-image plain-agent conditions (per-shard toolchain redownload
-eating the ~50min cap under instrumentation), which the warm image removes. The
-remaining open item is purely the elapsed 8/8 tally, gated on trial agent
-capacity, not on any unresolved shard failure.
+`$INC`/`$EXC` were EMPTY at the mvn line. The old YAML set them in a multi-line
+`case` block and read them back on a later `mvn` line; this command wrapper
+pre-expands a bare `$VAR` at trace time before the line runs (the very same quirk
+that bit `$LD_PRELOAD`), so `$INC`/`$EXC` came back empty and every shard ran
+`-Dtest.include=""` = the full suite. Package distribution in the griffin-sub log
+proves it: 989 griffin classes but also 240 cairo, 227 cutlass, 165 std, etc.
+That also explains the ~40min shard times earlier in this run - each "shard" was
+running all 37,934 tests, not its slice.
 
-Honest tradeoff to flag (a cost, not a win): these instrumented shards run much
-longer here than the design doc's earlier plain-agent cairo-root data point
-(8.7 min). The heaviest shard, fuzz1 (`**/cairo/fuzz/**` under jacoco +
-qdbr-coverage + the jemalloc LD_PRELOAD), was still running at 42.4 min - only
-about 7-8 min of margin under the ~50min hosted-agent job cap. Two compounding
-causes: (a) the 4-agent trial cap serializes 8 shards 3-wide, so agents are
-under load; (b) adding the jemalloc LD_PRELOAD makes an already heavy
-instrumented run heavier. On a production setup with more agents (no 3-wide
-serialization) the per-shard wall time should drop, but the fuzz1/cap margin is
-thin enough that a production port should either split the fuzz shard finer or
-raise the job timeout before relying on jemalloc-instrumented coverage. This is
-a capacity/timeout property to size for, not a correctness defect.
+### The single erroring test is a known flake, swept in by the empty filter
+
+The one error was:
+
+    ServerMainTest.testServerUpgradeDoesNotOverrideWebConsoleConfig
+      » Runtime Cannot read from /tmp/junit.../dbRoot/public/assets/console-configuration.json
+
+`ServerMainTest` is a top-level `io.questdb.test` class (NOT under griffin), and
+its failure is a non-deterministic ServerMain-boot file-read race (the web
+console `console-configuration.json` is read before the unpack completes). This
+is the same flake the design doc's build #36 hit ("a known non-deterministic
+setUp flake"), and the MAIN pipeline's `test: other` leg already excludes it
+(`-Dtest.exclude='...**/ServerMainTest.java'`). With a working griffin filter it
+would never have been in the griffin-sub shard at all; the empty filter dragged
+the whole suite in and rolled the flake.
+
+### The fix
+
+`.buildkite/pipeline.coverage.yaml` now puts the LD_PRELOAD prefix, the profiles,
+AND the `-Dtest.include`/`-Dtest.exclude` literals for each shard on ONE physical
+line, inside the `case` arm - no cross-line `$INC`/`$EXC` read, so the filter
+survives the wrapper's trace pre-expansion. It also adds `**/ServerMainTest.java`
+to the `other` shard's exclude, mirroring the main pipeline, so the flaky boot
+test cannot land in any shard even if a future pattern widens.
+
+Verification: griffin-sub re-run with the fixed inline filter (pipeline build #2):
+<RESULT_GRIFFIN_SUB_FIX>
+
+### Corrections to my earlier claims in this note
+
+Earlier revisions of this note asserted "no shard failed" and "griffin-sub no
+longer reproduces its exit-1", inferred from watching elapsed times while build
+#1 was still running. That was WRONG: griffin-sub did fail with exit 1, and the
+shards were slow precisely because the broken filter made every one run the full
+37,934-test suite. The failure was real (a genuine bug in the shard YAML plus a
+known flake it exposed), not the infra-timeout story the design doc had guessed.
+
+### Honest tradeoff still worth flagging
+
+Even with the filter fixed, instrumented coverage shards are heavy under
+jacoco+qdbr-coverage+jemalloc. On the trial's 4-agent cap they serialize 3-wide.
+The fix should cut per-shard wall time sharply (each shard runs its slice, not
+the whole suite), but a production port should still size the job timeout / agent
+count for the heaviest correctly-scoped shard rather than assume the ~50min cap
+is comfortable.
 
 ## Files changed
 
