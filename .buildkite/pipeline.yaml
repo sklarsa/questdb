@@ -189,16 +189,47 @@ steps:
       source .buildkite/macos-prelude.sh
       mvn $MVN_COMMON clean test -Dtest.include='**/griffin/**'
 
-  # NOTE: the jemalloc LD_PRELOAD coverage leg (Azure self-hosted-cover-jobs.yml)
-  # is deliberately NOT included yet - see docs/superpowers/specs/
-  # 2026-07-31-buildkite-workflow-port-design.md, chunk 2. On these hosted
-  # agents libjemalloc2 installs to /usr/lib/x86_64-linux-gnu/libjemalloc.so.2
-  # (confirmed by in-step dpkg -L/find diagnostics) yet every resolver - ls glob,
-  # ldconfig -p, find variants, and even a bare `test -e <exact path>` - returned
-  # empty when run in the step's command shell, while the identical lookup in the
-  # diagnostics block succeeded. Root cause is an unresolved hosted-agent
-  # filesystem-visibility quirk, tracked as a follow-up. The proof-of-path
-  # coverage leg above already exercises the JaCoCo/qdbr-coverage path.
+  - label: ":bar_chart: coverage (jemalloc)"
+    key: coverage-jemalloc
+    agents:
+      # linux-large: instrumented runs under jemalloc need the headroom, and it
+      # keeps this leg well clear of the ~50min hosted-agent job cap.
+      queue: linux-large
+    cache:
+      paths:
+        - "~/.m2/repository"
+      name: "maven"
+    command: |
+      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
+      # jemalloc via LD_PRELOAD, mirroring Azure steps.yml "Run tests with
+      # Coverage (jemalloc)". The whole 10-build jemalloc saga chased an
+      # apt-installed libjemalloc2 and then failed to LOCATE it at runtime - but
+      # Azure never installs one: it LD_PRELOADs the libjemalloc.so COMMITTED in
+      # the repo at core/src/main/bin/linux-x86-64/libjemalloc.so. That file is
+      # always in the checkout, so there is nothing to discover: no apt, no
+      # ldconfig, no find.
+      #
+      # CRITICAL wrapper quirk (measured on build #1 of questdb-jemalloc-deferred):
+      # this command wrapper PRE-EXPANDS a bare $VAR reference at trace time,
+      # BEFORE the line runs - so `export LD_PRELOAD=...; test -f "$LD_PRELOAD"`
+      # saw an EMPTY $LD_PRELOAD even though the export is on the SAME line (the
+      # trace showed `test -f ""`, and the guard fired with an empty path). The
+      # fix: NEVER read a $VAR we just set. Recompute the path inline with $(pwd)
+      # (command substitution IS preserved by the wrapper and runs at runtime),
+      # and set LD_PRELOAD as an inline command-PREFIX on the very process that
+      # needs it - set-and-use in one spawn, no cross-reference.
+      echo "--- verify jemalloc is present and actually preloads (fail if not)"
+      test -f "$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" || { echo "FATAL: committed libjemalloc.so missing in checkout"; exit 1; }
+      LD_PRELOAD="$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" bash -c 'grep -q jemalloc /proc/self/maps && echo "jemalloc preloaded OK: $(grep -c jemalloc /proc/self/maps) mappings" || { echo "FATAL: jemalloc did NOT preload (not in /proc/self/maps)"; exit 1; }'
+      echo "--- pre-build core so the instrumented run has deps"
+      mvn $MVN_COMMON -pl core -am -DskipTests install
+      echo "--- instrumented test slice (std package) with jacoco, under jemalloc"
+      LD_PRELOAD="$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" mvn $MVN_COMMON -f core/pom.xml test \
+        -P jacoco,qdbr-coverage \
+        -Dtest.include='**/std/**' \
+        -Dout=$(pwd)/ci/qlog.conf
+      echo "--- jacoco report"
+      mvn $MVN_COMMON -f core/pom.xml jacoco:report || true
 
   - label: ":handshake: compat"
     key: compat

@@ -1,8 +1,9 @@
 # Throwaway: the 8-way coverage matrix + merge, for fast isolated verification.
 # Mirrors Azure self-hosted-cover-jobs.yml's shard split (griffin-root/sub,
 # fuzz1/2, cairo-root/sub, pgwire, other), each instrumented with
-# -P jacoco,qdbr-coverage. Runs WITHOUT the jemalloc LD_PRELOAD (chunk 2 is
-# deferred) - still valid coverage, just not exercising the native allocator.
+# -P jacoco,qdbr-coverage, under the jemalloc allocator (LD_PRELOAD of the
+# repo-committed core/src/main/bin/linux-x86-64/libjemalloc.so) - exactly like
+# Azure steps.yml "Run tests with Coverage (jemalloc)".
 #
 # Each shard copies its jacoco.exec to a per-shard name and uploads it; the
 # merge step downloads them all and produces one combined report.
@@ -30,31 +31,42 @@ steps:
           - "core/target/jacoco-{{matrix}}.exec"
         command: |
           PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
+          # jemalloc via LD_PRELOAD of the repo-committed libjemalloc.so (no apt,
+          # no runtime discovery - the file is always in the checkout). This
+          # wrapper PRE-EXPANDS a bare $VAR at trace time before the line runs,
+          # so a just-set $LD_PRELOAD reads back EMPTY on its own line (proven on
+          # questdb-jemalloc-deferred build #1). So NEVER read a var we set:
+          # recompute the path inline with $(pwd) and set LD_PRELOAD as an inline
+          # command-PREFIX on the process that needs it. Fail the shard if it did
+          # not map, so no shard silently runs on the system allocator.
+          test -f "$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" || { echo "FATAL: committed libjemalloc.so missing in checkout"; exit 1; }
+          LD_PRELOAD="$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" bash -c 'grep -q jemalloc /proc/self/maps && echo "jemalloc preloaded OK: $(grep -c jemalloc /proc/self/maps) mappings" || { echo "FATAL: jemalloc did NOT preload"; exit 1; }'
           echo "--- pre-build core so the instrumented run has deps"
           mvn $MVN_COMMON -pl core -am -DskipTests install
           # Per-shard include/exclude, copied verbatim from Azure
-          # self-hosted-cover-jobs.yml. Assigned by the matrix value.
-          INC=""; EXC=""
-          case "{{matrix}}" in
-            griffin-root) INC="**/griffin/*" ;;
-            griffin-sub)  INC="**/griffin/**/*"; EXC="**/griffin/*" ;;
-            fuzz1)        INC="**/cairo/fuzz/**" ;;
-            fuzz2)        INC="**/O3*Test**,**/**Fuzz**"; EXC="**/cairo/fuzz/**" ;;
-            cairo-root)   INC="**/cairo/*"; EXC="**/O3*Test**,**/**Fuzz**" ;;
-            cairo-sub)    INC="**/cairo/**/*"; EXC="**/cairo/*,**/O3*Test**,**/**Fuzz**" ;;
-            pgwire)       INC="**/pgwire/**/*.java" ;;
-            other)        EXC="**/griffin/**,**/cairo/**,**/pgwire/**" ;;
+          # self-hosted-cover-jobs.yml. CRITICAL: the whole mvn command - profiles,
+          # LD_PRELOAD prefix, AND the -Dtest.include/-Dtest.exclude literals - must
+          # live on ONE physical line PER SHARD. An earlier version set INC=/EXC=
+          # in a `case` block and then read $INC/$EXC on a later `mvn` line; this
+          # command wrapper pre-expands a bare $VAR at trace time BEFORE the line
+          # runs, so $INC/$EXC read back EMPTY and every shard ran `-Dtest.include=""`
+          # = the FULL 37934-test suite (proven on build #1: griffin-sub logged
+          # "include=[] exclude=[]", ran all packages, took ~40min, and tripped the
+          # flaky top-level ServerMainTest that its griffin pattern would have
+          # excluded). Inlining the literals keeps set-and-use on one line, so the
+          # filter actually takes effect. jem= holds only the LD_PRELOAD path and is
+          # used on the SAME line it is set.
+          echo "--- coverage shard {{matrix}} (patterns inlined per shard)"
+          case "{{matrix}}" in \
+            griffin-root) LD_PRELOAD="$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.include="**/griffin/*" ;; \
+            griffin-sub)  LD_PRELOAD="$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.include="**/griffin/**/*" -Dtest.exclude="**/griffin/*" ;; \
+            fuzz1)        LD_PRELOAD="$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.include="**/cairo/fuzz/**" ;; \
+            fuzz2)        LD_PRELOAD="$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.include="**/O3*Test**,**/**Fuzz**" -Dtest.exclude="**/cairo/fuzz/**" ;; \
+            cairo-root)   LD_PRELOAD="$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.include="**/cairo/*" -Dtest.exclude="**/O3*Test**,**/**Fuzz**" ;; \
+            cairo-sub)    LD_PRELOAD="$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.include="**/cairo/**/*" -Dtest.exclude="**/cairo/*,**/O3*Test**,**/**Fuzz**" ;; \
+            pgwire)       LD_PRELOAD="$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.include="**/pgwire/**/*.java" ;; \
+            other)        LD_PRELOAD="$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.exclude="**/griffin/**,**/cairo/**,**/pgwire/**,**/ServerMainTest.java" ;; \
           esac
-          echo "--- coverage shard {{matrix}}: include=[$INC] exclude=[$EXC]"
-          # Build the include/exclude flags on ONE line each (a var set on one
-          # line reads empty on the next in this command wrapper).
-          if [ -n "$INC" ] && [ -n "$EXC" ]; then
-            mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.include="$INC" -Dtest.exclude="$EXC"
-          elif [ -n "$INC" ]; then
-            mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.include="$INC"
-          else
-            mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.exclude="$EXC"
-          fi
           cp core/target/jacoco.exec core/target/jacoco-{{matrix}}.exec
 
   - label: ":bar_chart: coverage merge"
