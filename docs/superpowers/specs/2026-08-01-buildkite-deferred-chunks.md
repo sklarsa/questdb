@@ -164,8 +164,18 @@ survives the wrapper's trace pre-expansion. It also adds `**/ServerMainTest.java
 to the `other` shard's exclude, mirroring the main pipeline, so the flaky boot
 test cannot land in any shard even if a future pattern widens.
 
-Verification: griffin-sub re-run with the fixed inline filter (pipeline build #2):
-<RESULT_GRIFFIN_SUB_FIX>
+Verification: griffin-sub re-run with the fixed inline filter (pipeline build #2,
+griffin-sub-only). Confirmed from the streamed txt log while it ran:
+- The mvn line now carries the POPULATED filter: `-Dtest.include="**/griffin/**/*"`
+  (build #1 logged `-Dtest.include=""`). The empty-filter bug is gone.
+- Only `io.questdb.test.griffin` test packages appear - zero cairo/cutlass/std
+  contamination (build #1's griffin-sub had run all of them).
+- `ServerMainTest` count in the log: 0 - the flaky boot test is no longer swept
+  into the shard.
+- `jemalloc preloaded OK: 5 mappings` - jemalloc still active on the fixed path.
+The griffin subset (~774 classes) runs far faster than the ~40min full-suite the
+broken filter forced, confirming both the scoping and the earlier slow-shard
+explanation.
 
 ### Corrections to my earlier claims in this note
 
