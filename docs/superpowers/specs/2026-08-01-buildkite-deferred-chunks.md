@@ -173,9 +173,14 @@ griffin-sub-only). Confirmed from the streamed txt log while it ran:
 - `ServerMainTest` count in the log: 0 - the flaky boot test is no longer swept
   into the shard.
 - `jemalloc preloaded OK: 5 mappings` - jemalloc still active on the fixed path.
-The griffin subset (~774 classes) runs far faster than the ~40min full-suite the
-broken filter forced, confirming both the scoping and the earlier slow-shard
-explanation.
+
+Build #2 PASSED. Final reactor summary:
+`Results: Tests run: 14271, Failures: 0, Errors: 0, Skipped: 24`. That 14,271 is
+the griffin subpackage slice - versus the 37,934 the broken filter ran in build
+#1 - so the scope is now correct AND the shard is green with zero failures. The
+old griffin-sub exit-1 is fully explained and fixed: it was the empty filter
+running the whole suite and rolling the flaky ServerMainTest, not a griffin
+defect.
 
 ### Corrections to my earlier claims in this note
 
