@@ -35,9 +35,23 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
         build-essential \
         cmake \
         libicu-dev \
+        libjemalloc2 \
         locales \
         maven \
     && rm -rf /var/lib/apt/lists/*
+
+# jemalloc under coverage instrumentation. The coverage leg LD_PRELOADs the
+# libjemalloc.so committed in the repo at core/src/main/bin/linux-x86-64/, which
+# is the primary, image-independent path (that file is always in the checkout).
+# This apt install is a belt-and-suspenders fallback so a KNOWN symlink also
+# exists on the image, avoiding the runtime ldconfig/find discovery that sank the
+# earlier attempts. libjemalloc2 installs the versioned .so.2; the dev-less
+# symlink below gives the coverage step a stable, discovery-free path to fall
+# back to. See docs/superpowers/specs/2026-08-01-buildkite-deferred-chunks.md.
+RUN set -eux; \
+    jem="$(dpkg -L libjemalloc2 | grep -m1 'libjemalloc\.so\.2$')"; \
+    ln -sf "$jem" /opt/libjemalloc.so; \
+    test -e /opt/libjemalloc.so
 
 # UTF-8 locale: several QuestDB tests assert on default platform encoding.
 RUN locale-gen en_US.UTF-8 && update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8

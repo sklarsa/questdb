@@ -1,8 +1,9 @@
 # Throwaway: the 8-way coverage matrix + merge, for fast isolated verification.
 # Mirrors Azure self-hosted-cover-jobs.yml's shard split (griffin-root/sub,
 # fuzz1/2, cairo-root/sub, pgwire, other), each instrumented with
-# -P jacoco,qdbr-coverage. Runs WITHOUT the jemalloc LD_PRELOAD (chunk 2 is
-# deferred) - still valid coverage, just not exercising the native allocator.
+# -P jacoco,qdbr-coverage, under the jemalloc allocator (LD_PRELOAD of the
+# repo-committed core/src/main/bin/linux-x86-64/libjemalloc.so) - exactly like
+# Azure steps.yml "Run tests with Coverage (jemalloc)".
 #
 # Each shard copies its jacoco.exec to a per-shard name and uploads it; the
 # merge step downloads them all and produces one combined report.
@@ -30,6 +31,16 @@ steps:
           - "core/target/jacoco-{{matrix}}.exec"
         command: |
           PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
+          # jemalloc via LD_PRELOAD of the repo-committed libjemalloc.so (no apt,
+          # no runtime discovery - the file is always in the checkout). This
+          # wrapper PRE-EXPANDS a bare $VAR at trace time before the line runs,
+          # so a just-set $LD_PRELOAD reads back EMPTY on its own line (proven on
+          # questdb-jemalloc-deferred build #1). So NEVER read a var we set:
+          # recompute the path inline with $(pwd) and set LD_PRELOAD as an inline
+          # command-PREFIX on the process that needs it. Fail the shard if it did
+          # not map, so no shard silently runs on the system allocator.
+          test -f "$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" || { echo "FATAL: committed libjemalloc.so missing in checkout"; exit 1; }
+          LD_PRELOAD="$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" bash -c 'grep -q jemalloc /proc/self/maps && echo "jemalloc preloaded OK: $(grep -c jemalloc /proc/self/maps) mappings" || { echo "FATAL: jemalloc did NOT preload"; exit 1; }'
           echo "--- pre-build core so the instrumented run has deps"
           mvn $MVN_COMMON -pl core -am -DskipTests install
           # Per-shard include/exclude, copied verbatim from Azure
@@ -47,13 +58,15 @@ steps:
           esac
           echo "--- coverage shard {{matrix}}: include=[$INC] exclude=[$EXC]"
           # Build the include/exclude flags on ONE line each (a var set on one
-          # line reads empty on the next in this command wrapper).
+          # line reads empty on the next in this command wrapper). LD_PRELOAD is
+          # set as an inline command-prefix (recomputed with $(pwd)) so the
+          # instrumented mvn run uses jemalloc without reading back a set var.
           if [ -n "$INC" ] && [ -n "$EXC" ]; then
-            mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.include="$INC" -Dtest.exclude="$EXC"
+            LD_PRELOAD="$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.include="$INC" -Dtest.exclude="$EXC"
           elif [ -n "$INC" ]; then
-            mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.include="$INC"
+            LD_PRELOAD="$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.include="$INC"
           else
-            mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.exclude="$EXC"
+            LD_PRELOAD="$(pwd)/core/src/main/bin/linux-x86-64/libjemalloc.so" mvn $MVN_COMMON -f core/pom.xml test -P jacoco,qdbr-coverage -Dtest.exclude="$EXC"
           fi
           cp core/target/jacoco.exec core/target/jacoco-{{matrix}}.exec
 
