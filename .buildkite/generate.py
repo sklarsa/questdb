@@ -16,6 +16,7 @@ generator bug can never fail the build.
 
 Stdlib only. Python 3.
 """
+import json
 import os
 import subprocess
 import sys
@@ -23,6 +24,11 @@ import xml.etree.ElementTree as ET
 
 N_SHARDS = 4  # test shards; tune from observed wall-clock balance.
 STATIC_FALLBACK = os.path.join(os.path.dirname(__file__), "pipeline.static.yaml")
+# Committed per-class timings snapshot, refreshed from a green build. This is the
+# rate-limit-proof primary source: Buildkite's per-user REST budget (50/window)
+# makes a live per-artifact download of a whole green build's surefire XMLs
+# impractical, so the generator reads this file when no live timings are present.
+COMMITTED_TIMINGS = os.path.join(os.path.dirname(__file__), "timings.json")
 
 
 def load_timings(xml_paths):
@@ -45,6 +51,27 @@ def load_timings(xml_paths):
                 out[name] = out.get(name, 0.0) + float(t)
             except ValueError:
                 continue
+    return out
+
+
+def load_committed_timings(path=COMMITTED_TIMINGS):
+    """Map test-class FQN -> wall-clock seconds from the committed snapshot.
+
+    Best-effort: a missing or malformed snapshot yields an empty map (the
+    generator then falls back to bin_pack's median weighting), never an error.
+    """
+    try:
+        with open(path) as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    raw = doc.get("timings", {}) if isinstance(doc, dict) else {}
+    out = {}
+    for k, v in raw.items():
+        try:
+            out[k] = float(v)
+        except (TypeError, ValueError):
+            continue
     return out
 
 
@@ -174,15 +201,22 @@ def main():
             # Docs/CI-only change: emit a no-test pipeline (lint only).
             sys.stdout.write(render_pipeline([]))
             return
-        # Timings come from surefire artifacts fetched by the bootstrap into
-        # ./surefire-timings/ (see the bootstrap step). Absent -> empty -> the
-        # median fallback in bin_pack still produces balanced shards by count.
+        # Timings source, in order of preference:
+        #  1. Live surefire XMLs the bootstrap fetched into ./surefire-timings/
+        #     (freshest, but needs a working REST token + rate-limit headroom).
+        #  2. The committed timings.json snapshot (rate-limit-proof; always in
+        #     the checkout).
+        #  3. Nothing -> bin_pack's median weighting balances by count.
         timing_dir = os.environ.get("QDB_TIMING_DIR", "surefire-timings")
         xmls = []
         if os.path.isdir(timing_dir):
             for dp, _d, fs in os.walk(timing_dir):
                 xmls += [os.path.join(dp, f) for f in fs if f.endswith(".xml")]
         timings = load_timings(xmls)
+        if not timings:
+            timings = load_committed_timings()
+            if timings:
+                sys.stderr.write(f"generate.py: using committed timings.json ({len(timings)} classes)\n")
         classes = _discover_test_classes()
         shards = bin_pack(classes, timings, N_SHARDS)
         sys.stdout.write(render_pipeline(shards))

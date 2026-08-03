@@ -3,6 +3,7 @@
 Run: cd .buildkite && python3 -m unittest test_generate -v
 Pure-logic tests only - no Buildkite API, no network.
 """
+import json
 import os
 import tempfile
 import unittest
@@ -65,6 +66,32 @@ class TestLoadTimings(unittest.TestCase):
             f.write('<testsuite name="Dup" time="2.5"/>')
         t = generate.load_timings([p1, p2])
         self.assertEqual(t["Dup"], 4.0)
+
+
+class TestLoadCommittedTimings(unittest.TestCase):
+    def test_reads_snapshot(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "timings.json")
+        with open(p, "w") as f:
+            json.dump({"timings": {"io.questdb.test.Foo": 3.5, "Bar": "1.0"}}, f)
+        t = generate.load_committed_timings(p)
+        self.assertEqual(t, {"io.questdb.test.Foo": 3.5, "Bar": 1.0})
+
+    def test_missing_file_is_empty(self):
+        self.assertEqual(generate.load_committed_timings("/nonexistent/timings.json"), {})
+
+    def test_malformed_json_is_empty(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "timings.json")
+        with open(p, "w") as f:
+            f.write("{ not json")
+        self.assertEqual(generate.load_committed_timings(p), {})
+
+    def test_committed_snapshot_present_and_usable(self):
+        # The real committed snapshot must load and weight the 'other' shard.
+        t = generate.load_committed_timings()
+        self.assertGreater(len(t), 100)
+        self.assertIn("io.questdb.test.ServerMainQuerySmokeTest", t)
 
 
 class TestSelectShards(unittest.TestCase):
