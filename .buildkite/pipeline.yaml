@@ -231,6 +231,24 @@ steps:
       echo "--- jacoco report"
       mvn $MVN_COMMON -f core/pom.xml jacoco:report || true
 
+  - label: ":crab: rust coverage (cargo test)"
+    key: rust-coverage
+    agents:
+      queue: linux-medium
+    # Four instrumented cargo-test suites (qdb-core, qdb-parquet-meta, qdbr,
+    # parquet2) under LLVM source-based coverage, mirroring Azure
+    # rust-test-and-lint.yml. Uploads one LCOV per crate for the coverage-report
+    # merge. Rust-only (no client, no JVM tests), so PRELUDE_NEED_RUST=1 and no
+    # PRELUDE_NEED_CLIENT. The heavy lifting lives in rust-coverage.sh because
+    # Buildkite's command wrapper pre-expands bare $VARs at trace time (empties
+    # cross-line vars); inside a sourced script ordinary shell semantics hold.
+    artifact_paths:
+      - "rust-lint-profraw/*.lcov"
+      - "rust-lint-profraw/*.profdata"
+    command: |
+      PRELUDE_NEED_RUST=1 source .buildkite/prelude.sh
+      bash .buildkite/rust-coverage.sh
+
   - label: ":handshake: compat"
     key: compat
     agents:
