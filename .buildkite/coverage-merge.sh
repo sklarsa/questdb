@@ -46,10 +46,14 @@ if find "$DL_DIR" -name '*.exec' -type f | grep -q .; then
   mvn $MVN_COMMON -f ci/jacoco-merge.xml verify \
     -DincludeRoot="$DL_DIR" \
     -DoutputDirectory="$SRC_DIR/jacoco-aggregate"
-  # jacoco-merge.xml writes the report into core/target/classes (its
-  # outputDirectory), and the .xml alongside; surface the jacoco.xml path.
-  JACOCO_XML="$(find "$SRC_DIR/core/target/classes" core/target -name 'jacoco.xml' -print -quit 2>/dev/null || true)"
-  echo "jacoco.xml: ${JACOCO_XML:-<not found>}"
+  # The jacoco report goal's ${outputDirectory} resolves from the -D above (there
+  # is no <properties> default for it), so the merged jacoco.xml lands in
+  # jacoco-aggregate/, exactly where Azure's PublishBuildArtifacts picks it up
+  # ($(Pipeline.Workspace)/jacoco-aggregate/jacoco.xml). Do NOT look in
+  # core/target/classes - that is the compiler plugin's outputDirectory (the
+  # classes root the report reads FROM), not where the report is written.
+  JACOCO_XML="$SRC_DIR/jacoco-aggregate/jacoco.xml"
+  echo "jacoco.xml: $([ -f "$JACOCO_XML" ] && echo "$JACOCO_XML" || echo '<not found>')"
 else
   echo "No JaCoCo .exec files present; skipping JaCoCo merge."
 fi
