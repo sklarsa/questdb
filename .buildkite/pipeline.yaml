@@ -110,6 +110,12 @@ steps:
             - "core/target/site/jacoco"
             - "core/target/jacoco.exec"
           compressed: jacoco-report.tgz
+    # Also upload the raw jacoco.exec UNCOMPRESSED (one small file, no HTML), so
+    # the coverage-merge leg can `artifact download **/jacoco.exec` without
+    # unpacking the HTML tgz. The compressed tgz above bundles the exec together
+    # with the thousands of HTML files, which is not individually downloadable.
+    artifact_paths:
+      - "core/target/jacoco.exec"
     command: |
       PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
       echo "--- pre-build core so coverage run has deps"
@@ -248,6 +254,32 @@ steps:
     command: |
       PRELUDE_NEED_RUST=1 source .buildkite/prelude.sh
       bash .buildkite/rust-coverage.sh
+
+  - label: ":heavy_plus_sign: coverage merge (no PR post)"
+    key: coverage-merge
+    agents:
+      queue: linux-medium
+    cache:
+      paths:
+        - "~/.m2/repository"
+      name: "maven"
+    # Merges the partial coverage the upstream legs uploaded: the JaCoCo
+    # jacoco.exec into one jacoco.xml, and the per-crate Rust LCOV into one
+    # cobertura.xml (Azure's CoverageReports merge). depends_on gates it behind
+    # the producers; allow_dependency_failure so a single flaky coverage leg
+    # does not starve the merge of the other's inputs. This leg STOPS before
+    # Azure's cover-checker GitHub PR post - no --github-token, no --pr, no
+    # external side effect. Needs the client for the JaCoCo report's compiled
+    # classes (PRELUDE_NEED_CLIENT=1).
+    depends_on:
+      - coverage
+      - rust-coverage
+    allow_dependency_failure: true
+    artifact_paths:
+      - "coverage-merged/*.xml"
+    command: |
+      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
+      bash .buildkite/coverage-merge.sh
 
   - label: ":handshake: compat"
     key: compat
