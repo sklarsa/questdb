@@ -57,10 +57,20 @@ echo "--- parquet2: cargo test (coverage)"
 # LLVM coverage tools (llvm-profdata / llvm-cov) ship with the pinned toolchain's
 # llvm-tools-preview component. Add it to whatever toolchain rustup resolves here
 # (prelude pins the nightly default), then locate the binaries.
+#
+# Locate via `rustc --print sysroot`, NOT `rustup which` or $HOME/.rustup:
+#  - `rustup which llvm-profdata` ERRORS ("unknown binary") - llvm-profdata is a
+#    toolchain-internal tool under lib/rustlib/<triple>/bin, not a cargo bin, so
+#    it is not `which`-able.
+#  - the custom image sets RUSTUP_HOME=/opt/rust/rustup (see .buildkite/Dockerfile),
+#    so a hardcoded $HOME/.rustup/toolchains does not exist on the agent
+#    (build #47 failed here: "find: /root/.rustup/toolchains: No such file",
+#    then "llvm-profdata: command not found").
+# `rustc --print sysroot` resolves the ACTIVE toolchain regardless of where
+# rustup keeps it, so the find below always hits the right bin dir.
 echo "--- install llvm-tools-preview + locate tools"
 rustup component add llvm-tools-preview
-LLVM_TOOLS_PATH="$(dirname "$(rustup which llvm-profdata 2>/dev/null \
-  || find "$HOME/.rustup/toolchains" -name llvm-profdata -print -quit)")"
+LLVM_TOOLS_PATH="$(dirname "$(find "$(rustc --print sysroot)" -name llvm-profdata -print -quit)")"
 export PATH="$LLVM_TOOLS_PATH:$PATH"
 llvm-profdata --version | head -1
 llvm-cov --version | head -1
