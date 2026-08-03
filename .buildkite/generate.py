@@ -29,6 +29,11 @@ STATIC_FALLBACK = os.path.join(os.path.dirname(__file__), "pipeline.static.yaml"
 # makes a live per-artifact download of a whole green build's surefire XMLs
 # impractical, so the generator reads this file when no live timings are present.
 COMMITTED_TIMINGS = os.path.join(os.path.dirname(__file__), "timings.json")
+# The three static count-based test legs (griffin/cairo/other), as a header-less
+# fragment. Used as the --shards-only fallback: if shard generation fails, the
+# bootstrap still gets the original test coverage without duplicating the
+# non-test legs it already emitted.
+STATIC_TEST_LEGS = os.path.join(os.path.dirname(__file__), "pipeline.testlegs.yaml")
 
 
 def load_timings(xml_paths):
@@ -155,12 +160,42 @@ def _discover_test_classes():
     return classes
 
 
-def render_pipeline(shards):
-    """Emit a Buildkite pipeline YAML string for the weighted test shards.
+def render_shard_steps(shards):
+    """Emit ONLY the weighted test-shard step entries (no `steps:` header).
 
-    Always includes the always-run lint leg. Each shard runs its class list via
-    a comma-joined -Dtest.include. Emits a valid (if minimal) steps: block even
-    for an empty shard list.
+    These replace the three static `test: griffin/cairo/other` legs. Kept
+    header-less so the bootstrap can splice them under the static pipeline's
+    non-test legs (coverage, docker, macos, compat, ...) rather than dropping
+    them -- render_pipeline() would emit a standalone lint+shards pipeline and
+    lose every other leg.
+    """
+    lines = []
+    for i, shard in enumerate(s for s in shards if s):
+        includes = ",".join(class_to_include(c) for c in shard)
+        lines += [
+            f'  - label: ":coffee: test: shard-{i}"',
+            f"    key: test-shard-{i}",
+            "    agents: { queue: linux-large }",
+            "    artifact_paths:",
+            '      - "core/target/surefire-reports/**/*.xml"',
+            "    cache:",
+            "      paths:",
+            '        - "~/.m2/repository"',
+            '      name: "maven"',
+            "    command: |",
+            "      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh",
+            f"      mvn $MVN_COMMON clean test -Dtest.include='{includes}'",
+        ]
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def render_pipeline(shards):
+    """Emit a standalone Buildkite pipeline YAML for the weighted test shards.
+
+    Always includes the always-run lint leg. This is the proof-of-path /
+    smoke-test shape (lint + shards only); the production wiring uses
+    render_shard_steps() spliced under the full static pipeline instead. Emits a
+    valid (if minimal) steps: block even for an empty shard list.
     """
     lines = ["steps:"]
     lines += [
@@ -170,17 +205,9 @@ def render_pipeline(shards):
         "      source .buildkite/prelude.sh",
         "      python3 find_unterminated_logs.py core/src --exclude=LogParanoiaTest.java",
     ]
-    for i, shard in enumerate(s for s in shards if s):
-        includes = ",".join(class_to_include(c) for c in shard)
-        lines += [
-            f'  - label: ":coffee: test: shard-{i}"',
-            "    agents: { queue: linux-large }",
-            "    artifact_paths:",
-            '      - "core/target/surefire-reports/**/*.xml"',
-            "    command: |",
-            "      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh",
-            f"      mvn $MVN_COMMON clean test -Dtest.include='{includes}'",
-        ]
+    shard_steps = render_shard_steps(shards)
+    if shard_steps:
+        lines.append(shard_steps.rstrip("\n"))
     return "\n".join(lines) + "\n"
 
 
@@ -194,35 +221,71 @@ def _emit_static_fallback():
         sys.stdout.write('steps:\n  - command: "echo generator-and-fallback-failed; exit 1"\n')
 
 
-def main():
+def _compute_shards():
+    """Load the best available timings and bin-pack the discovered classes."""
+    # Timings source, in order of preference:
+    #  1. Live surefire XMLs the bootstrap fetched into ./surefire-timings/
+    #     (freshest, but needs a working REST token + rate-limit headroom).
+    #  2. The committed timings.json snapshot (rate-limit-proof; always in
+    #     the checkout).
+    #  3. Nothing -> bin_pack's median weighting balances by count.
+    timing_dir = os.environ.get("QDB_TIMING_DIR", "surefire-timings")
+    xmls = []
+    if os.path.isdir(timing_dir):
+        for dp, _d, fs in os.walk(timing_dir):
+            xmls += [os.path.join(dp, f) for f in fs if f.endswith(".xml")]
+    timings = load_timings(xmls)
+    if not timings:
+        timings = load_committed_timings()
+        if timings:
+            sys.stderr.write(f"generate.py: using committed timings.json ({len(timings)} classes)\n")
+    classes = _discover_test_classes()
+    return bin_pack(classes, timings, N_SHARDS)
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    # --shards-only: emit just the weighted test-shard steps (no `steps:`
+    # header), for splicing under the static pipeline's non-test legs. Default:
+    # emit the standalone lint+shards proof-of-path pipeline.
+    shards_only = "--shards-only" in argv
     try:
         changed = changed_paths()
         if changed and not select_shards(changed):
-            # Docs/CI-only change: emit a no-test pipeline (lint only).
-            sys.stdout.write(render_pipeline([]))
+            # Docs/CI-only change: no test shards this run.
+            sys.stdout.write(render_shard_steps([]) if shards_only else render_pipeline([]))
             return
-        # Timings source, in order of preference:
-        #  1. Live surefire XMLs the bootstrap fetched into ./surefire-timings/
-        #     (freshest, but needs a working REST token + rate-limit headroom).
-        #  2. The committed timings.json snapshot (rate-limit-proof; always in
-        #     the checkout).
-        #  3. Nothing -> bin_pack's median weighting balances by count.
-        timing_dir = os.environ.get("QDB_TIMING_DIR", "surefire-timings")
-        xmls = []
-        if os.path.isdir(timing_dir):
-            for dp, _d, fs in os.walk(timing_dir):
-                xmls += [os.path.join(dp, f) for f in fs if f.endswith(".xml")]
-        timings = load_timings(xmls)
-        if not timings:
-            timings = load_committed_timings()
-            if timings:
-                sys.stderr.write(f"generate.py: using committed timings.json ({len(timings)} classes)\n")
-        classes = _discover_test_classes()
-        shards = bin_pack(classes, timings, N_SHARDS)
-        sys.stdout.write(render_pipeline(shards))
+        shards = _compute_shards()
+        sys.stdout.write(render_shard_steps(shards) if shards_only else render_pipeline(shards))
     except Exception as e:  # never fail the build on a generator bug
         sys.stderr.write(f"generate.py failed ({e!r}); emitting static fallback\n")
-        _emit_static_fallback()
+        if shards_only:
+            # In splice mode the caller already emitted the non-test legs, so a
+            # generator failure must fall back to the three STATIC test legs,
+            # not the whole static pipeline (which would duplicate every leg).
+            _emit_static_test_legs()
+        else:
+            _emit_static_fallback()
+
+
+def _emit_static_test_legs():
+    """Print the three static test legs (griffin/cairo/other) as a fragment.
+
+    The splice-mode fallback: if shard generation fails, the run still gets the
+    original count-based test coverage without duplicating the non-test legs the
+    caller already emitted.
+    """
+    try:
+        with open(STATIC_TEST_LEGS) as f:
+            sys.stdout.write(f.read())
+    except OSError:
+        sys.stdout.write(
+            '  - label: ":coffee: test: all (fallback)"\n'
+            "    agents: { queue: linux-large }\n"
+            "    command: |\n"
+            "      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh\n"
+            "      mvn $MVN_COMMON clean test\n"
+        )
 
 
 if __name__ == "__main__":

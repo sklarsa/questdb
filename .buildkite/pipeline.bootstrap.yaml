@@ -1,15 +1,30 @@
-# Dynamic-pipeline bootstrap. Fetches the last green build's surefire timings,
-# runs generate.py to emit a weighted/change-detected pipeline, and uploads it.
-# The generator falls back to the committed static pipeline on any error, so a
-# generator or fetch failure can never fail the build.
+# Dynamic-pipeline bootstrap (weighted sharding + change detection).
+#
+# Composes the run: the static NON-TEST legs (pipeline.notest.yaml) plus the
+# weighted test shards that generate.py emits in place of the three static
+# griffin/cairo/other legs. To make this the live pipeline, point the questdb
+# pipeline's inline config at this file instead of pipeline.yaml.
+#
+# Timings come from the committed timings.json snapshot (rate-limit-proof); the
+# best-effort fetch_timings.py refresh needs a REST token with read_builds +
+# read_artifacts as a pipeline secret (BUILDKITE_API_TOKEN). Do NOT reuse a
+# full-scope personal token here -- this is a public repo and external-PR jobs
+# can read pipeline secrets. Without a token the snapshot alone drives sharding.
+#
+# generate.py can never fail the build: on any error --shards-only falls back to
+# the three static test legs (pipeline.testlegs.yaml).
 steps:
   - label: ":pipeline: generate"
     agents:
       queue: linux-small
     command: |
       set -uo pipefail
-      echo "--- fetch last green build's surefire timings (best-effort)"
-      BUILDKITE_API_TOKEN="${BUILDKITE_AGENT_ACCESS_TOKEN:-}" \
+      echo "--- fetch last green build's surefire timings (best-effort refresh)"
+      if [ -n "${BUILDKITE_API_TOKEN:-}" ]; then
         python3 .buildkite/fetch_timings.py || true
-      echo "--- generate + upload dynamic pipeline (static fallback on error)"
-      python3 .buildkite/generate.py | buildkite-agent pipeline upload
+      else
+        echo "no BUILDKITE_API_TOKEN secret; using committed timings.json snapshot"
+      fi
+      echo "--- compose: static non-test legs + weighted test shards"
+      { cat .buildkite/pipeline.notest.yaml; python3 .buildkite/generate.py --shards-only; } \
+        | buildkite-agent pipeline upload

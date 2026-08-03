@@ -1,0 +1,46 @@
+  # Static count-based test legs (griffin / cairo / other), header-less so they
+  # splice under pipeline.notest.yaml. This is the FALLBACK the generator emits
+  # in --shards-only mode when weighted shard generation fails; the normal path
+  # replaces these three legs with N weighted shards from generate.py.
+  - label: ":coffee: test: griffin"
+    key: test-griffin
+    agents:
+      queue: linux-large
+    cache:
+      paths:
+        - "~/.m2/repository"
+      name: "maven"
+    artifact_paths:
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
+      mvn $MVN_COMMON clean test -Dtest.include='**/griffin/**'
+
+  - label: ":coffee: test: cairo"
+    key: test-cairo
+    agents:
+      queue: linux-large
+    cache:
+      paths:
+        - "~/.m2/repository"
+      name: "maven"
+    artifact_paths:
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
+      mvn $MVN_COMMON clean test -Dtest.include='**/cairo/**'
+
+  - label: ":coffee: test: other"
+    key: test-other
+    agents:
+      queue: linux-medium
+    cache:
+      paths:
+        - "~/.m2/repository"
+      name: "maven"
+    artifact_paths:
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
+      mvn $MVN_COMMON clean test \
+        -Dtest.exclude='**/griffin/**,**/cairo/**,**/compat/**,**/cliutil/**,**/ServerMainTest.java'
