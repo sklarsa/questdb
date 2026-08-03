@@ -53,6 +53,8 @@ import io.questdb.std.str.DirectUtf8Sink;
 import io.questdb.std.str.LPSZ;
 import io.questdb.std.str.Path;
 import io.questdb.std.str.StringSink;
+import io.questdb.std.str.Utf8StringSink;
+import io.questdb.std.str.Utf8s;
 import io.questdb.test.AbstractBootstrapTest;
 import io.questdb.test.AbstractTest;
 import io.questdb.test.QueryAssertion;
@@ -1758,16 +1760,32 @@ public class ExpParquetExportTest extends AbstractBootstrapTest {
                     params.put("query", "SELECT x + 1 AS cx, rnd_str(500, 1000, 0) AS big, ts FROM cb_test");
                     params.put("fmt", "parquet");
                     params.put("timeout", "1");
-                    // With a very short timeout the circuit breaker should trip
-                    // during PAGE_FRAME_BACKED export.  Depending on which code
-                    // path checks first, the error is either "timeout, query
-                    // aborted" (from the page-frame factory) or "cancelled by
-                    // user" (from the HTTP exporter).  The server may also just
-                    // disconnect.
+                    // The 1ms timeout races the export: on a slow enough page
+                    // frame the circuit breaker trips first, on fast hardware
+                    // the export can win the race and return a valid Parquet
+                    // file.  All of the following are correct outcomes -- the
+                    // point is that the server never crashes or corrupts:
+                    //   - "timeout, query aborted" (page-frame factory checks first)
+                    //   - "cancelled by user" (HTTP exporter checks first)
+                    //   - a valid Parquet body (breaker never tripped; export won)
+                    //   - a peer-disconnect / malformed-chunk HttpClientException
+                    // NOTE: assert on the *outcome*, never on the raw response
+                    // body -- a completed export can be hundreds of MB of binary
+                    // Parquet, and folding that into an assertion message once
+                    // produced a 369MB CI log.
                     try {
                         testHttpClient.assertGetContains("/exp", "timeout, query aborted", params);
                     } catch (AssertionError ae) {
-                        TestUtils.assertContains(ae.getMessage(), "cancelled by user");
+                        // The expected substring was absent: either a different
+                        // breaker message, or the export won the race and
+                        // returned a valid Parquet body.  Inspect the response
+                        // sink directly (assertGetContains left it populated) --
+                        // never ae.getMessage(), which embeds the whole body.
+                        Utf8StringSink sink = testHttpClient.getSink();
+                        Assert.assertTrue(
+                                "unexpected export outcome (head): " + sinkHead(sink),
+                                Utf8s.containsAscii(sink, "cancelled by user") || startsWithParquetMagic(sink)
+                        );
                     } catch (HttpClientException e) {
                         String msg = e.getMessage();
                         Assert.assertTrue(
@@ -2492,6 +2510,19 @@ public class ExpParquetExportTest extends AbstractBootstrapTest {
                 });
     }
 
+    // Returns the first bytes of a response sink rendered as printable ASCII
+    // ('?' for non-printable), capped so a large binary body never bloats an
+    // assertion message.
+    private static String sinkHead(Utf8StringSink sink) {
+        int n = Math.min(sink.size(), 64);
+        StringBuilder sb = new StringBuilder(n);
+        for (int i = 0; i < n; i++) {
+            byte b = sink.byteAt(i);
+            sb.append(b >= 0x20 && b < 0x7f ? (char) b : '?');
+        }
+        return sb.toString();
+    }
+
     private static @NotNull Thread startCancelThread(CairoEngine engine, SqlExecutionContext sqlExecutionContext) {
         return new Thread(() -> {
             try {
@@ -2540,6 +2571,17 @@ public class ExpParquetExportTest extends AbstractBootstrapTest {
             }
         }
         return req.send();
+    }
+
+    // A valid Parquet file begins with the 4-byte "PAR1" magic. Used to tell a
+    // completed export apart from an error response without materializing the
+    // (potentially huge) body as a String.
+    private static boolean startsWithParquetMagic(Utf8StringSink sink) {
+        return sink.size() >= 4
+                && sink.byteAt(0) == 'P'
+                && sink.byteAt(1) == 'A'
+                && sink.byteAt(2) == 'R'
+                && sink.byteAt(3) == '1';
     }
 
     private void assertParquetExportDataCorrectness(
