@@ -60,7 +60,14 @@ steps:
         - "~/.m2/repository"
       name: "maven-arm"
     command: |
-      PRELUDE_NEED_CLIENT=1 source .buildkite/linux-arm-prelude.sh
+      # PRELUDE_NEED_RUST=1 is REQUIRED here on arm even though the x86 twin omits
+      # it: the -P qdbr-coverage profile makes the rust-maven-plugin build the qdbr
+      # crate, which needs cargo on PATH. On x86 the custom linux-x86-test image
+      # bakes Rust in, so cargo is present without ensure_rust; the plain arm agent
+      # has no baked image, so cargo only lands on PATH when ensure_rust runs. This
+      # is the general arm-vs-x86 divergence: the plain agent needs every tool made
+      # explicit that the baked x86 image supplies implicitly.
+      PRELUDE_NEED_RUST=1 PRELUDE_NEED_CLIENT=1 source .buildkite/linux-arm-prelude.sh
       # The committed arm jemalloc lives at the linux-aarch64 arch dir (verified
       # present in the repo). Same wrapper quirk as the x86 leg: never read a
       # $VAR we just set - recompute the path inline with $(pwd) and set
