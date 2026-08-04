@@ -51,6 +51,14 @@ steps:
   # The arm functional legs need only PRELUDE_NEED_CLIENT (not _RUST): a plain
   # `mvn test` does not run the qdbr rust-maven-plugin build - only the
   # qdbr-coverage profile does - so this matches the x86 flags exactly.
+  #
+  # The prelude is selected INLINE on the same line as `source`, via command
+  # substitution, NOT a $PRELUDE var set on a prior line. Buildkite's command
+  # wrapper pre-expands a bare $VAR at trace time before the line runs, so a var
+  # set on one line reads back EMPTY on the next (build #60 hit exactly this:
+  # `source ""` -> "No such file or directory", all six legs failed). Command
+  # substitution $(...) is preserved by the wrapper and runs at runtime, so
+  # keeping the select+source in one spawn is the documented fix.
   - label: ":coffee: test: griffin{{matrix.arch}}"
     agents:
       queue: "linux{{matrix.arch}}-large"
@@ -66,8 +74,7 @@ steps:
     artifact_paths:
       - "core/target/surefire-reports/**/*.xml"
     command: |
-      if [ "{{matrix.arch}}" = "-arm" ]; then PRELUDE=.buildkite/linux-arm-prelude.sh; else PRELUDE=.buildkite/prelude.sh; fi
-      PRELUDE_NEED_CLIENT=1 source "$PRELUDE"
+      PRELUDE_NEED_CLIENT=1 source "$([ '{{matrix.arch}}' = '-arm' ] && echo .buildkite/linux-arm-prelude.sh || echo .buildkite/prelude.sh)"
       mvn $MVN_COMMON clean test -Dtest.include='**/griffin/**'
 
   - label: ":coffee: test: cairo{{matrix.arch}}"
@@ -85,8 +92,7 @@ steps:
     artifact_paths:
       - "core/target/surefire-reports/**/*.xml"
     command: |
-      if [ "{{matrix.arch}}" = "-arm" ]; then PRELUDE=.buildkite/linux-arm-prelude.sh; else PRELUDE=.buildkite/prelude.sh; fi
-      PRELUDE_NEED_CLIENT=1 source "$PRELUDE"
+      PRELUDE_NEED_CLIENT=1 source "$([ '{{matrix.arch}}' = '-arm' ] && echo .buildkite/linux-arm-prelude.sh || echo .buildkite/prelude.sh)"
       mvn $MVN_COMMON clean test -Dtest.include='**/cairo/**'
 
   - label: ":coffee: test: other{{matrix.arch}}"
@@ -104,8 +110,7 @@ steps:
     artifact_paths:
       - "core/target/surefire-reports/**/*.xml"
     command: |
-      if [ "{{matrix.arch}}" = "-arm" ]; then PRELUDE=.buildkite/linux-arm-prelude.sh; else PRELUDE=.buildkite/prelude.sh; fi
-      PRELUDE_NEED_CLIENT=1 source "$PRELUDE"
+      PRELUDE_NEED_CLIENT=1 source "$([ '{{matrix.arch}}' = '-arm' ] && echo .buildkite/linux-arm-prelude.sh || echo .buildkite/prelude.sh)"
       mvn $MVN_COMMON clean test \
         -Dtest.exclude='**/griffin/**,**/cairo/**,**/compat/**,**/cliutil/**,**/ServerMainTest.java'
 

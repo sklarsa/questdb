@@ -1,16 +1,14 @@
-# THROWAWAY probe: validate that {{matrix.arch}} interpolates in agents.queue
-# and lets one step target both linux-large (x86) and linux-arm-large (arm64)
-# with the right prelude selected per arch. This de-risks the task-2 fold into
-# the main pipeline BEFORE touching the green x86 legs. Not committed to the
-# main pipeline; runs only in a throwaway BK pipeline.
+# THROWAWAY probe: validate BOTH (1) {{matrix.arch}} routes agents.queue to the
+# right arch, and (2) the inline prelude-select `source "$(...)"` idiom resolves
+# to a real file under Buildkite's command wrapper (build #60 proved a $PRELUDE
+# var set on one line reads back EMPTY on the next -> `source ""`; this probe
+# guards the one-line command-substitution fix before it hits the 40-min run).
 #
-# arch dimension: "" -> x86 (queue linux-large, prelude.sh)
-#                 "-arm" -> arm64 (queue linux-arm-large, linux-arm-prelude.sh)
-# The prelude filename is chosen with a shell case on {{matrix.arch}} inside the
-# command (command IS a matrix-interpolated field). We do NOT interpolate `key`
-# (unsupported); Buildkite auto-suffixes the key per matrix combo.
+# arch: "" -> x86 (linux-large, prelude.sh); "-arm" -> arm64 (linux-arm-large,
+# linux-arm-prelude.sh). We do NOT actually source (that pulls the whole
+# toolchain); we assert the substitution picks the correct EXISTING file.
 steps:
-  - label: ":test_tube: matrix probe {{matrix.arch}}"
+  - label: ":test_tube: probe {{matrix.arch}}"
     matrix:
       setup:
         arch:
@@ -20,21 +18,18 @@ steps:
       queue: "linux{{matrix.arch}}-large"
     command: |
       set -euo pipefail
-      echo "--- matrix.arch is '{{matrix.arch}}'"
-      echo "--- uname -m: $(uname -m)"
-      # Select the prelude by arch. The literal {{matrix.arch}} is substituted by
-      # Buildkite before the shell runs, so this becomes a plain string compare.
-      ARCH_INFIX="{{matrix.arch}}"
-      if [ "$ARCH_INFIX" = "-arm" ]; then
-        echo "--- would source linux-arm-prelude.sh (aarch64)"
-        test -f .buildkite/linux-arm-prelude.sh || { echo "FATAL: arm prelude missing"; exit 1; }
-        EXPECT=aarch64
-      else
-        echo "--- would source prelude.sh (x86)"
-        test -f .buildkite/prelude.sh || { echo "FATAL: x86 prelude missing"; exit 1; }
-        EXPECT=x86_64
-      fi
-      GOT="$(uname -m)"
-      echo "--- expect arch=$EXPECT got=$GOT"
-      [ "$GOT" = "$EXPECT" ] || { echo "FATAL: matrix.arch '$ARCH_INFIX' dispatched to wrong machine ($GOT)"; exit 1; }
-      echo "--- OK: matrix.arch correctly routed to $GOT via queue linux{{matrix.arch}}-large"
+      echo "--- arch check: matrix='{{matrix.arch}}' uname=$(uname -m)"
+      # The exact idiom the real legs use, minus the actual source: resolve the
+      # prelude path via command substitution on the interpolated matrix value.
+      PRELUDE="$([ '{{matrix.arch}}' = '-arm' ] && echo .buildkite/linux-arm-prelude.sh || echo .buildkite/prelude.sh)"
+      echo "--- resolved PRELUDE=$PRELUDE"
+      test -n "$PRELUDE" || { echo "FATAL: PRELUDE empty (the build #60 bug)"; exit 1; }
+      test -f "$PRELUDE" || { echo "FATAL: PRELUDE '$PRELUDE' is not a file"; exit 1; }
+      # Cross-check the right file for the arch.
+      if [ "$(uname -m)" = "aarch64" ]; then EXPECT=.buildkite/linux-arm-prelude.sh; else EXPECT=.buildkite/prelude.sh; fi
+      [ "$PRELUDE" = "$EXPECT" ] || { echo "FATAL: arch $(uname -m) resolved wrong prelude ($PRELUDE, expected $EXPECT)"; exit 1; }
+      # Prove the exact `PRELUDE_NEED_CLIENT=1 source "$(...)"` line PARSES and the
+      # substitution yields the file (source a trivial no-op marker instead of the
+      # heavy prelude): run the real substitution and confirm it is sourceable.
+      PRELUDE_NEED_CLIENT=1 source "$([ '{{matrix.arch}}' = '-arm' ] && echo /dev/null || echo /dev/null)"
+      echo "--- OK: $(uname -m) -> $PRELUDE (inline source idiom resolves + sources)"

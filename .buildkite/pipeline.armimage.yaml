@@ -19,10 +19,14 @@ steps:
       [ "$(uname -m)" = "aarch64" ] || { echo "FATAL: not on an arm64 agent"; exit 1; }
       echo "--- synthesize a buildable Dockerfile: public base + the arm64 layers"
       # Replace the Buildkite-internal FROM with a public arm64 base so the RUN
-      # layers can be exercised natively. Everything below the FROM is verbatim
+      # layers can be exercised natively. Use ubuntu:24.04 (NOT debian:bookworm):
+      # the real buildkite/hosted-agent-base is Ubuntu-derived, and debian's
+      # update-locale rejects persisting LC_ALL ("invalid locale settings"),
+      # which is a base quirk, not an arm image bug. Ubuntu matches the real base
+      # behaviour for the locale layer. Everything below the FROM is verbatim
       # from .buildkite/Dockerfile.arm64.
       {
-        echo "FROM debian:bookworm"
+        echo "FROM ubuntu:24.04"
         sed '1,/^FROM /d' .buildkite/Dockerfile.arm64
       } > Dockerfile.arm64.validate
       echo "--- built Dockerfile (head):"
