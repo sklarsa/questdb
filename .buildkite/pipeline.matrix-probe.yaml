@@ -19,17 +19,17 @@ steps:
     command: |
       set -euo pipefail
       echo "--- arch check: matrix='{{matrix.arch}}' uname=$(uname -m)"
-      # The exact idiom the real legs use, minus the actual source: resolve the
-      # prelude path via command substitution on the interpolated matrix value.
-      PRELUDE="$([ '{{matrix.arch}}' = '-arm' ] && echo .buildkite/linux-arm-prelude.sh || echo .buildkite/prelude.sh)"
-      echo "--- resolved PRELUDE=$PRELUDE"
-      test -n "$PRELUDE" || { echo "FATAL: PRELUDE empty (the build #60 bug)"; exit 1; }
-      test -f "$PRELUDE" || { echo "FATAL: PRELUDE '$PRELUDE' is not a file"; exit 1; }
-      # Cross-check the right file for the arch.
-      if [ "$(uname -m)" = "aarch64" ]; then EXPECT=.buildkite/linux-arm-prelude.sh; else EXPECT=.buildkite/prelude.sh; fi
-      [ "$PRELUDE" = "$EXPECT" ] || { echo "FATAL: arch $(uname -m) resolved wrong prelude ($PRELUDE, expected $EXPECT)"; exit 1; }
-      # Prove the exact `PRELUDE_NEED_CLIENT=1 source "$(...)"` line PARSES and the
-      # substitution yields the file (source a trivial no-op marker instead of the
-      # heavy prelude): run the real substitution and confirm it is sourceable.
+      # Assert the INLINE idiom the real legs use: the command substitution is on
+      # the SAME line as its use, with NO $PRELUDE var read on a later line. (An
+      # earlier version of this probe assigned PRELUDE=$(...) then tested it on
+      # the next line - which reintroduced the very cross-line-var bug it was
+      # meant to guard, a false negative. The real legs never do that.)
+      # Echo the resolved path inline so the substitution's result is visible:
+      echo "--- resolved inline: $([ '{{matrix.arch}}' = '-arm' ] && echo .buildkite/linux-arm-prelude.sh || echo .buildkite/prelude.sh)"
+      # Assert the file exists AND matches the arch, all inline (same-line subs):
+      test -f "$([ '{{matrix.arch}}' = '-arm' ] && echo .buildkite/linux-arm-prelude.sh || echo .buildkite/prelude.sh)" || { echo "FATAL: resolved prelude is not a file"; exit 1; }
+      test "$(uname -m)" = "$([ '{{matrix.arch}}' = '-arm' ] && echo aarch64 || echo x86_64)" || { echo "FATAL: matrix.arch routed to wrong machine"; exit 1; }
+      # Prove the exact `PRELUDE_NEED_CLIENT=1 source "$(...)"` line parses+sources
+      # (source /dev/null as a cheap no-op stand-in for the heavy prelude):
       PRELUDE_NEED_CLIENT=1 source "$([ '{{matrix.arch}}' = '-arm' ] && echo /dev/null || echo /dev/null)"
-      echo "--- OK: $(uname -m) -> $PRELUDE (inline source idiom resolves + sources)"
+      echo "--- OK: $(uname -m) inline source idiom resolves + sources correctly"
