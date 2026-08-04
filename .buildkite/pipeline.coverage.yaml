@@ -27,8 +27,18 @@ steps:
           - "cairo-sub"
           - "pgwire"
           - "other"
+        # Upload via a STATIC glob, not "jacoco-{{matrix}}.exec": Buildkite does
+        # NOT interpolate {{matrix}} inside artifact_paths (it does in command/
+        # label/key), so the literal "core/target/jacoco-{{matrix}}.exec" matched
+        # no file and every shard uploaded nothing - the merge then found zero
+        # execs and failed even though all 8 shards were green (proven on build
+        # #3: "No files matched paths: core/target/jacoco-{{matrix}}.exec", then
+        # the merge's "no artifacts found for downloading"). The cp in command
+        # DOES expand {{matrix}}, so each shard leaves exactly one
+        # jacoco-<shard>.exec; the glob below matches that one file (and not the
+        # un-suffixed jacoco.exec, which has no dash).
         artifact_paths:
-          - "core/target/jacoco-{{matrix}}.exec"
+          - "core/target/jacoco-*.exec"
         command: |
           PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
           # jemalloc via LD_PRELOAD of the repo-committed libjemalloc.so (no apt,
