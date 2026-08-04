@@ -1,0 +1,40 @@
+# THROWAWAY probe: validate that {{matrix.arch}} interpolates in agents.queue
+# and lets one step target both linux-large (x86) and linux-arm-large (arm64)
+# with the right prelude selected per arch. This de-risks the task-2 fold into
+# the main pipeline BEFORE touching the green x86 legs. Not committed to the
+# main pipeline; runs only in a throwaway BK pipeline.
+#
+# arch dimension: "" -> x86 (queue linux-large, prelude.sh)
+#                 "-arm" -> arm64 (queue linux-arm-large, linux-arm-prelude.sh)
+# The prelude filename is chosen with a shell case on {{matrix.arch}} inside the
+# command (command IS a matrix-interpolated field). We do NOT interpolate `key`
+# (unsupported); Buildkite auto-suffixes the key per matrix combo.
+steps:
+  - label: ":test_tube: matrix probe {{matrix.arch}}"
+    matrix:
+      setup:
+        arch:
+          - ""
+          - "-arm"
+    agents:
+      queue: "linux{{matrix.arch}}-large"
+    command: |
+      set -euo pipefail
+      echo "--- matrix.arch is '{{matrix.arch}}'"
+      echo "--- uname -m: $(uname -m)"
+      # Select the prelude by arch. The literal {{matrix.arch}} is substituted by
+      # Buildkite before the shell runs, so this becomes a plain string compare.
+      ARCH_INFIX="{{matrix.arch}}"
+      if [ "$ARCH_INFIX" = "-arm" ]; then
+        echo "--- would source linux-arm-prelude.sh (aarch64)"
+        test -f .buildkite/linux-arm-prelude.sh || { echo "FATAL: arm prelude missing"; exit 1; }
+        EXPECT=aarch64
+      else
+        echo "--- would source prelude.sh (x86)"
+        test -f .buildkite/prelude.sh || { echo "FATAL: x86 prelude missing"; exit 1; }
+        EXPECT=x86_64
+      fi
+      GOT="$(uname -m)"
+      echo "--- expect arch=$EXPECT got=$GOT"
+      [ "$GOT" = "$EXPECT" ] || { echo "FATAL: matrix.arch '$ARCH_INFIX' dispatched to wrong machine ($GOT)"; exit 1; }
+      echo "--- OK: matrix.arch correctly routed to $GOT via queue linux{{matrix.arch}}-large"
