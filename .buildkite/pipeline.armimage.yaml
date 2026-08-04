@@ -31,14 +31,14 @@ steps:
       } > Dockerfile.arm64.validate
       echo "--- built Dockerfile (head):"
       head -20 Dockerfile.arm64.validate
-      echo "--- build the arm64 image layers natively (no push)"
-      # --load imports the built image into the local docker daemon. Without it,
-      # the hosted agent's buildx uses the remote nsc-remote builder, which
-      # leaves the result in the remote build cache only - the verify `docker
-      # run` below then fails "image not found locally" (armimage #2 hit exactly
-      # this: all 7 layers built, incl. the in-build [7/7] mvn/java/cargo/rustfmt
-      # /clippy version check, but the external run could not see the image).
-      docker build --load -f Dockerfile.arm64.validate -t questdb-arm-agent:validate .
+      echo "--- build the arm64 image layers natively (no push), NO CACHE"
+      # --no-cache is CRITICAL: an earlier build cached the [7/7] version-check
+      # layer, so it read CACHED and NEVER ACTUALLY RAN on a clean build - which
+      # masked an exit-126 (permission denied) failure that only appears on a
+      # fresh build (as hit in the real Buildkite UI image editor). Force every
+      # layer to run for real. --load imports the result into the local daemon
+      # (the remote nsc-remote builder otherwise leaves it in the remote cache).
+      docker build --no-cache --load -f Dockerfile.arm64.validate -t questdb-arm-agent:validate .
       echo "--- verify baked toolchain inside the image"
       docker run --rm questdb-arm-agent:validate bash -lc '
         set -e

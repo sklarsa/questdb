@@ -73,7 +73,8 @@ RUN curl -fsSL "https://api.adoptium.net/v3/binary/latest/25/ga/linux/aarch64/jd
       -o /tmp/jdk.tar.gz \
     && mkdir -p /opt/jdk \
     && tar -xzf /tmp/jdk.tar.gz -C /opt/jdk --strip-components=1 \
-    && rm /tmp/jdk.tar.gz
+    && rm /tmp/jdk.tar.gz \
+    && chmod -R a+rX /opt/jdk && chmod a+x /opt/jdk/bin/* /opt/jdk/lib/jspawnhelper 2>/dev/null || true
 ENV JAVA_HOME=/opt/jdk
 ENV PATH=$JAVA_HOME/bin:$PATH
 
