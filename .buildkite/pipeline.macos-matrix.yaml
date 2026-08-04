@@ -1,0 +1,44 @@
+# macOS full 7-group test matrix (throwaway validation).
+#
+# Expands the single merged `mac-griffin` leg into Azure's full macOS matrix
+# from ci/templates/hosted-jobs.yml: griffin-base/sub/fuzz, cairo, cairo-fuzz,
+# pgwire, other - 7 groups on the macos-large (M4 arm64) hosted queue. Validated
+# here in isolation, then folded into the main pipeline.
+#
+# Wrapper-safety: each group's full `mvn ... -Dtest.include/-Dtest.exclude` runs
+# LITERALLY inside its own `case` arm - NO include/exclude shell var set on one
+# line and read on another. Buildkite's command wrapper pre-expands a bare $VAR
+# at trace time before the line runs (this exact trap emptied the coverage-matrix
+# shard filters and the arm prelude select). Keeping the whole mvn invocation in
+# the case arm is the documented fix: set+use in one spawn.
+#
+# {{matrix.group}} interpolates in label and command (validated by the arch
+# matrix). `key` cannot be matrixed, so no explicit keys here.
+steps:
+  - label: ":apple: mac {{matrix.group}}"
+    agents:
+      queue: macos-large
+    matrix:
+      setup:
+        group:
+          - "griffin-base"
+          - "griffin-sub"
+          - "griffin-fuzz"
+          - "cairo"
+          - "cairo-fuzz"
+          - "pgwire"
+          - "other"
+    artifact_paths:
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      source .buildkite/macos-prelude.sh
+      case "{{matrix.group}}" in
+        griffin-base) mvn $MVN_COMMON clean test -Dtest.include='**/griffin/*' -Dtest.exclude='**/griffin/**/*Fuzz*' ;;
+        griffin-sub)  mvn $MVN_COMMON clean test -Dtest.include='**/griffin/**/*' -Dtest.exclude='**/griffin/*,**/griffin/fuzz/**,**/griffin/**/*Fuzz*' ;;
+        griffin-fuzz) mvn $MVN_COMMON clean test -Dtest.include='**/griffin/fuzz/**,**/griffin/**/*Fuzz*' ;;
+        cairo)        mvn $MVN_COMMON clean test -Dtest.include='**/cairo/**' -Dtest.exclude='**/cairo/fuzz/**' ;;
+        cairo-fuzz)   mvn $MVN_COMMON clean test -Dtest.include='**/cairo/fuzz/**' ;;
+        pgwire)       mvn $MVN_COMMON clean test -Dtest.include='**/pgwire/**/*.java' ;;
+        other)        mvn $MVN_COMMON clean test -Dtest.exclude='**/griffin/**,**/cairo/**,**/compat/**,**/cliutil/**,**/pgwire/**,**/ServerMainTest.java' ;;
+        *) echo "FATAL: unknown group '{{matrix.group}}'"; exit 1 ;;
+      esac
