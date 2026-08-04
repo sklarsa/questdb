@@ -1,0 +1,44 @@
+# THROWAWAY: validate that the arm64 agent-image layers build on native arm64.
+#
+# The real image is built by Buildkite's custom-agent-image editor from
+# .buildkite/Dockerfile.arm64 (paste-below-FROM), whose FROM
+# buildkite/hosted-agent-base:latest is Buildkite-internal and not pullable here.
+# To validate the RUN layers on real aarch64 hardware (no x86 qemu emulation),
+# this leg swaps in a public debian:bookworm base and builds the same layers on
+# a linux-arm-large agent. A green build proves the apt/rustup/JDK-aarch64/
+# jemalloc/locale layers all succeed on arm64; the user then pastes
+# Dockerfile.arm64's body into the UI editor for the production image.
+steps:
+  - label: ":docker: validate arm64 agent-image layers"
+    agents:
+      queue: linux-arm-large
+    command: |
+      set -euo pipefail
+      echo "--- arch probe (must be aarch64)"
+      uname -m
+      [ "$(uname -m)" = "aarch64" ] || { echo "FATAL: not on an arm64 agent"; exit 1; }
+      echo "--- synthesize a buildable Dockerfile: public base + the arm64 layers"
+      # Replace the Buildkite-internal FROM with a public arm64 base so the RUN
+      # layers can be exercised natively. Everything below the FROM is verbatim
+      # from .buildkite/Dockerfile.arm64.
+      {
+        echo "FROM debian:bookworm"
+        sed '1,/^FROM /d' .buildkite/Dockerfile.arm64
+      } > Dockerfile.arm64.validate
+      echo "--- built Dockerfile (head):"
+      head -20 Dockerfile.arm64.validate
+      echo "--- build the arm64 image layers natively (no push)"
+      docker build -f Dockerfile.arm64.validate -t questdb-arm-agent:validate .
+      echo "--- verify baked toolchain inside the image"
+      docker run --rm questdb-arm-agent:validate bash -lc '
+        set -e
+        echo "arch: $(uname -m)"
+        echo "java: $(/opt/jdk/bin/java -version 2>&1 | head -1)"
+        /opt/jdk/bin/java -version 2>&1 | grep -q "version \"25" || { echo "FATAL: JDK is not 25"; exit 1; }
+        echo "mvn:  $(mvn -version 2>&1 | head -1)"
+        echo "cargo: $(/opt/rust/cargo/bin/cargo --version)"
+        /opt/rust/cargo/bin/rustfmt --version
+        /opt/rust/cargo/bin/cargo clippy --version
+        test -e /opt/libjemalloc.so && echo "jemalloc symlink OK: $(readlink -f /opt/libjemalloc.so)"
+      '
+      echo "--- OK: arm64 agent-image layers build + toolchain works on aarch64"

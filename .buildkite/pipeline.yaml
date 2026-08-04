@@ -41,10 +41,24 @@ steps:
       # came back empty here even though `ls core/target` listed the JARs.
       ./ci/check-bytecode-size.sh --jar-dir core/target --threshold 8000
 
-  - label: ":coffee: test: griffin"
-    key: test-griffin
+  # Functional test legs run on BOTH arches via a matrix over `arch`:
+  #   ""     -> x86  : queue linux-large,     prelude.sh
+  #   "-arm" -> arm64: queue linux-arm-large, linux-arm-prelude.sh
+  # {{matrix.arch}} interpolates in agents.queue and command (validated by the
+  # questdb-matrix-probe pipeline: each leg asserted uname -m matched its arch).
+  # `key` does NOT support matrix interpolation, so these matrixed legs carry no
+  # explicit key (Buildkite auto-suffixes per combo); nothing depends_on them.
+  # The arm functional legs need only PRELUDE_NEED_CLIENT (not _RUST): a plain
+  # `mvn test` does not run the qdbr rust-maven-plugin build - only the
+  # qdbr-coverage profile does - so this matches the x86 flags exactly.
+  - label: ":coffee: test: griffin{{matrix.arch}}"
     agents:
-      queue: linux-large
+      queue: "linux{{matrix.arch}}-large"
+    matrix:
+      setup:
+        arch:
+          - ""
+          - "-arm"
     cache:
       paths:
         - "~/.m2/repository"
@@ -52,13 +66,18 @@ steps:
     artifact_paths:
       - "core/target/surefire-reports/**/*.xml"
     command: |
-      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
+      if [ "{{matrix.arch}}" = "-arm" ]; then PRELUDE=.buildkite/linux-arm-prelude.sh; else PRELUDE=.buildkite/prelude.sh; fi
+      PRELUDE_NEED_CLIENT=1 source "$PRELUDE"
       mvn $MVN_COMMON clean test -Dtest.include='**/griffin/**'
 
-  - label: ":coffee: test: cairo"
-    key: test-cairo
+  - label: ":coffee: test: cairo{{matrix.arch}}"
     agents:
-      queue: linux-large
+      queue: "linux{{matrix.arch}}-large"
+    matrix:
+      setup:
+        arch:
+          - ""
+          - "-arm"
     cache:
       paths:
         - "~/.m2/repository"
@@ -66,13 +85,18 @@ steps:
     artifact_paths:
       - "core/target/surefire-reports/**/*.xml"
     command: |
-      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
+      if [ "{{matrix.arch}}" = "-arm" ]; then PRELUDE=.buildkite/linux-arm-prelude.sh; else PRELUDE=.buildkite/prelude.sh; fi
+      PRELUDE_NEED_CLIENT=1 source "$PRELUDE"
       mvn $MVN_COMMON clean test -Dtest.include='**/cairo/**'
 
-  - label: ":coffee: test: other"
-    key: test-other
+  - label: ":coffee: test: other{{matrix.arch}}"
     agents:
-      queue: linux-medium
+      queue: "linux{{matrix.arch}}-medium"
+    matrix:
+      setup:
+        arch:
+          - ""
+          - "-arm"
     cache:
       paths:
         - "~/.m2/repository"
@@ -80,7 +104,8 @@ steps:
     artifact_paths:
       - "core/target/surefire-reports/**/*.xml"
     command: |
-      PRELUDE_NEED_CLIENT=1 source .buildkite/prelude.sh
+      if [ "{{matrix.arch}}" = "-arm" ]; then PRELUDE=.buildkite/linux-arm-prelude.sh; else PRELUDE=.buildkite/prelude.sh; fi
+      PRELUDE_NEED_CLIENT=1 source "$PRELUDE"
       mvn $MVN_COMMON clean test \
         -Dtest.exclude='**/griffin/**,**/cairo/**,**/compat/**,**/cliutil/**,**/ServerMainTest.java'
 
