@@ -1,0 +1,99 @@
+# Buildkite arm64 (aarch64) Linux multi-arch trial for QuestDB core.
+#
+# Throwaway pipeline (mirrors questdb-fuzz / questdb-cov-matrix): proves the
+# aarch64 path in isolation so a red arm build never gates the main `questdb`
+# pipeline. Once green, the legs fold into the main pipeline as an arm variant.
+#
+# Runs on the hosted linux-arm-* queues (LINUX_ARM64_*, added via the Cluster
+# UI). No custom arm agent image is pinned (linux-x86-test is amd64-only), so
+# every leg runs on the PLAIN arm agent and sources linux-arm-prelude.sh, which
+# installs JDK/Maven/(Rust) from upstream and builds the linux-aarch64 native
+# libquestdb.so. See docs/superpowers/specs (buildkite scope-expansion) Phase 3.
+#
+# Scope of the first arm proof (breadth-first, "arm + native artifacts"):
+#  - lint             : rust fmt/clippy + native client compile (arm toolchain)
+#  - test: griffin    : one functional shard, the cleanest, on linux-arm-large
+#  - coverage jemalloc: proves the COMMITTED linux-aarch64/libjemalloc.so preloads
+#  - docker build     : native-arch build -> the arm64 image (multi-arch input)
+steps:
+  - label: ":lint-roller: arm lint"
+    key: arm-lint
+    agents:
+      queue: linux-arm-small
+    cache:
+      paths:
+        - "~/.m2/repository"
+      name: "maven-arm"
+    command: |
+      PRELUDE_NEED_RUST=1 PRELUDE_NEED_CLIENT=1 source .buildkite/linux-arm-prelude.sh
+      echo "--- unterminated log check"
+      python3 find_unterminated_logs.py core/src --exclude=LogParanoiaTest.java
+      echo "--- rust fmt + clippy"
+      ( cd core/rust/qdb-core         && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
+      ( cd core/rust/qdb-parquet-meta && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
+      ( cd core/rust/qdbr             && cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings )
+      echo "--- compile core (needed for bytecode check)"
+      mvn $MVN_COMMON -pl core -am -DskipTests package
+      echo "--- bytecode size check"
+      ./ci/check-bytecode-size.sh --jar-dir core/target --threshold 8000
+
+  - label: ":coffee: arm test: griffin"
+    key: arm-test-griffin
+    agents:
+      queue: linux-arm-large
+    cache:
+      paths:
+        - "~/.m2/repository"
+      name: "maven-arm"
+    artifact_paths:
+      - "core/target/surefire-reports/**/*.xml"
+    command: |
+      PRELUDE_NEED_CLIENT=1 source .buildkite/linux-arm-prelude.sh
+      mvn $MVN_COMMON clean test -Dtest.include='**/griffin/**'
+
+  - label: ":bar_chart: arm coverage (jemalloc)"
+    key: arm-coverage-jemalloc
+    agents:
+      queue: linux-arm-large
+    cache:
+      paths:
+        - "~/.m2/repository"
+      name: "maven-arm"
+    command: |
+      PRELUDE_NEED_CLIENT=1 source .buildkite/linux-arm-prelude.sh
+      # The committed arm jemalloc lives at the linux-aarch64 arch dir (verified
+      # present in the repo). Same wrapper quirk as the x86 leg: never read a
+      # $VAR we just set - recompute the path inline with $(pwd) and set
+      # LD_PRELOAD as an inline command-PREFIX on the process that needs it.
+      echo "--- verify arm jemalloc is present and actually preloads (fail if not)"
+      test -f "$(pwd)/core/src/main/bin/linux-aarch64/libjemalloc.so" || { echo "FATAL: committed arm libjemalloc.so missing in checkout"; exit 1; }
+      LD_PRELOAD="$(pwd)/core/src/main/bin/linux-aarch64/libjemalloc.so" bash -c 'grep -q jemalloc /proc/self/maps && echo "jemalloc preloaded OK: $(grep -c jemalloc /proc/self/maps) mappings" || { echo "FATAL: jemalloc did NOT preload (not in /proc/self/maps)"; exit 1; }'
+      echo "--- pre-build core so the instrumented run has deps"
+      mvn $MVN_COMMON -pl core -am -DskipTests install
+      echo "--- instrumented test slice (std package) with jacoco, under jemalloc"
+      LD_PRELOAD="$(pwd)/core/src/main/bin/linux-aarch64/libjemalloc.so" mvn $MVN_COMMON -f core/pom.xml test \
+        -P jacoco,qdbr-coverage \
+        -Dtest.include='**/std/**' \
+        -Dout=$(pwd)/ci/qlog.conf
+      echo "--- jacoco report"
+      mvn $MVN_COMMON -f core/pom.xml jacoco:report || true
+
+  - label: ":docker: arm docker build (no push)"
+    key: arm-docker-build
+    agents:
+      queue: linux-arm-large
+    # Native-arch build on an arm agent => the arm64 questdb image. No push, no
+    # registry login. This is the arm half of the multi-arch manifest the docker
+    # release pipeline will eventually assemble. Does NOT source the prelude:
+    # core/Dockerfile builds its whole toolchain in-container, so the host needs
+    # only docker + the client submodule for the local-client build context.
+    command: |
+      set -euo pipefail
+      echo "--- arch + docker availability probe"
+      uname -m
+      docker version
+      docker buildx version || echo "buildx not present (plain docker build is fine)"
+      echo "--- init client submodule (local-client build context)"
+      git submodule update --init --recursive java-questdb-client
+      echo "--- build questdb image (native arm64 arch, no push)"
+      docker build -f core/Dockerfile --target questdb -t questdb-ci:local-arm64 .
