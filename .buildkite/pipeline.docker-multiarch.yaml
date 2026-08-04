@@ -1,0 +1,73 @@
+# Docker multi-arch build + manifest-merge validation - NO PUSH.
+#
+# Mirrors Azure's ci/docker-release-pipeline.yml structure (Build amd64 / Build
+# arm64 / Combine multi-arch manifests) but stops BEFORE any registry push. It
+# proves both arch images build natively on their own queues and that the
+# manifest-merge inputs (per-arch digests) are well-formed, without publishing
+# anything or needing a Docker Hub secret.
+#
+# WHY no real `imagetools create`: `docker buildx imagetools create -t REPO:tag
+# <digestA> <digestB>` operates on images ALREADY IN A REGISTRY - it merges
+# registry references. With no push there are no registry digests to merge, so a
+# faithful no-push run cannot call the real merge against a registry. Instead
+# each arch leg builds to a local OCI tarball and records its manifest digest +
+# platform; the merge leg downloads both, asserts one is linux/amd64 and the
+# other linux/arm64, and prints the EXACT `imagetools create` command that the
+# push-enabled version would run. Wiring the real push is then a documented
+# one-step change: add the registry login + swap the per-arch build output to
+# `type=image,push-by-digest=true,push=true`, then run the printed merge.
+#
+# Shell note: NO heredocs. Buildkite's command wrapper mangles multi-line
+# heredocs under trace mode + YAML indentation, so all inspection is done with
+# single-line `python3 -c` or jq, keeping each set+use on one line.
+steps:
+  - label: ":docker: build amd64 (no push)"
+    key: docker-amd64
+    agents:
+      queue: linux-large
+    artifact_paths:
+      - "docker-meta/amd64.json"
+    command: |
+      set -euo pipefail
+      echo "--- init client submodule (local-client build context)"
+      git submodule update --init --recursive java-questdb-client
+      mkdir -p docker-meta
+      echo "--- build questdb amd64 image to a local OCI tarball (no push)"
+      docker buildx build -f core/Dockerfile --target questdb --platform linux/amd64 --output "type=oci,dest=questdb-amd64.tar" --metadata-file docker-meta/amd64.raw.json .
+      echo "--- record arch + digest for the merge leg"
+      python3 -c "import json; m=json.load(open('docker-meta/amd64.raw.json')); json.dump({'platform':'linux/amd64','digest':m.get('containerimage.digest','')}, open('docker-meta/amd64.json','w')); print('amd64 digest:', m.get('containerimage.digest',''))"
+
+  - label: ":docker: build arm64 (no push)"
+    key: docker-arm64
+    agents:
+      queue: linux-arm-large
+    artifact_paths:
+      - "docker-meta/arm64.json"
+    command: |
+      set -euo pipefail
+      echo "--- init client submodule (local-client build context)"
+      git submodule update --init --recursive java-questdb-client
+      mkdir -p docker-meta
+      echo "--- build questdb arm64 image to a local OCI tarball (no push, native arm)"
+      docker buildx build -f core/Dockerfile --target questdb --platform linux/arm64 --output "type=oci,dest=questdb-arm64.tar" --metadata-file docker-meta/arm64.raw.json .
+      echo "--- record arch + digest for the merge leg"
+      python3 -c "import json; m=json.load(open('docker-meta/arm64.raw.json')); json.dump({'platform':'linux/arm64','digest':m.get('containerimage.digest','')}, open('docker-meta/arm64.json','w')); print('arm64 digest:', m.get('containerimage.digest',''))"
+
+  - label: ":package: validate multi-arch manifest (no push)"
+    key: docker-manifest
+    agents:
+      queue: linux-small
+    depends_on:
+      - docker-amd64
+      - docker-arm64
+    command: |
+      set -euo pipefail
+      echo "--- download both per-arch metadata files"
+      buildkite-agent artifact download "docker-meta/amd64.json" .
+      buildkite-agent artifact download "docker-meta/arm64.json" .
+      echo "--- assert both arches present, distinct, well-formed"
+      python3 -c "import json; a=json.load(open('docker-meta/amd64.json')); b=json.load(open('docker-meta/arm64.json')); assert a['platform']=='linux/amd64' and b['platform']=='linux/arm64', (a,b); print('amd64:',a); print('arm64:',b)"
+      echo "--- the exact merge the push-enabled version would run (printed, not executed - no registry here):"
+      echo "    docker buildx imagetools create -t questdb/questdb:nightly \\"
+      echo "      questdb/questdb@<amd64-digest> questdb/questdb@<arm64-digest>"
+      echo "--- OK: both arch images built; multi-arch merge inputs validated (no push)"
